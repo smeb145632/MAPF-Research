@@ -43,7 +43,7 @@ int main(int argc, char **argv)
     pybind11::initialize_interpreter();
 #endif
 #endif
-    // Declare the supported options.
+    // 声明支持的选项
     po::options_description desc("Allowed options");
     desc.add_options()("help", "produce help message")
         ("actionMoveTimeLimit,a", po::value<int>()->default_value(100), "the  time limit for move one action in milliseconds")
@@ -66,8 +66,8 @@ int main(int argc, char **argv)
     po::store(po::parse_command_line(argc, argv, desc), vm);
 
     //time per tick 
-    // max counter 
-    // initial planning time 
+    // max counter
+    // initial planning time
     // min communication tick 
 
     if (vm.count("help"))
@@ -144,7 +144,7 @@ int main(int argc, char **argv)
       }
     }
 
-    // check if the path exists;
+    // 检查路径是否存在
     if (file_storage_path!="" &&!std::filesystem::exists(file_storage_path)){
       std::ostringstream stringStream;
       stringStream << "fileStoragePath (" << file_storage_path << ") is not valid";

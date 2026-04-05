@@ -12,7 +12,7 @@ Grid::Grid(string fname)
         exit(-1);
     }
 
-    // cout << "*** Loading map ***" << std::endl;
+    // cout << "*** 加载地图 ***" << std::endl;
     clock_t t = std::clock();
     size_t pos = fname.rfind('.');  // position of the file extension
     map_name = fname.substr(0, pos);  // get the name without extension
@@ -27,13 +27,13 @@ Grid::Grid(string fname)
         boost::tokenizer<boost::char_separator<char>>::iterator beg;
         beg = tok.begin();
         beg++;
-        rows = atoi((*beg).c_str()); // read number of rows
+        rows = atoi((*beg).c_str()); // 读取行数
         getline(myfile, line);
         boost::tokenizer<boost::char_separator<char>> tok2(line, sep);
         beg = tok2.begin();
         beg++;
-        cols = atoi((*beg).c_str()); // read number of cols
-        getline(myfile, line); // skip "map"
+        cols = atoi((*beg).c_str()); // 读取列数
+        getline(myfile, line); // 跳过 "map"
 
     }
     else
@@ -49,7 +49,7 @@ Grid::Grid(string fname)
     map.resize(cols * rows, 0);
 
     //DeliverGoal.resize(row*col, false);
-    // read map
+    // 读取地图
     //int ep = 0, ag = 0;
     for (int i = 0; i < rows; i++)
     {
@@ -57,15 +57,15 @@ Grid::Grid(string fname)
         for (int j = 0; j < cols; j++)
         {
             int id = cols * i + j;
-            if (line[j] == '@' || line[j] == 'T') // obstacle
+            if (line[j] == '@' || line[j] == 'T') // 障碍物
                 map[id] = 1;
-            else   // free space
+            else   // 空闲空间
                 map[id] = 0;
         }
     }
 
     myfile.close();
     double runtime = (std::clock() - t) / CLOCKS_PER_SEC;
-    // cout << "Map size: " << rows << "x" << cols;
-    // cout << "\tDone! (load time: " << runtime << " s)" << std::endl;
+    // cout << "地图大小: " << rows << "x" << cols;
+    // cout << "\t完成! (加载时间: " << runtime << " 秒)" << std::endl;
 }

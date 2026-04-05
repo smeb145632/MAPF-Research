@@ -19,16 +19,16 @@ void BaseSystem::sync_shared_env()
 
         // if (simulator.get_curr_timestep() == 0)
         // {
-        //     env->new_freeagents.reserve(num_of_agents); //new free agents are empty in task_manager on initialization, set it after task_manager sync
+        //     env->new_freeagents.reserve(num_of_agents); //新空闲的agent在task_manager初始化时为空，在task_manager同步后设置
         //     for (int i = 0; i < num_of_agents; i++)
         //     {
         //         env->new_freeagents.push_back(i);
         //     }
         // }
-        // //update proposed action to all wait
+        // //将提议的动作更新为全部等待
         // proposed_actions.clear();
         // proposed_actions.resize(num_of_agents, Action::W);
-        // //update proposed schedule to previous assignment
+        // //将提议的调度更新为之前的分配
         // proposed_schedule = env->curr_task_schedule;
         
     }
@@ -129,7 +129,7 @@ void BaseSystem::simulate(int simulation_time, int chunk_size)
             //move takes more time than simulator_time_limit, extend deadline
             deadline += std::chrono::milliseconds(simulator_time_limit);
         }
-        // wait until deadline OR planner finishes early
+        // 等待直到截止时间或规划器提前完成
         const auto st = future.wait_until(deadline);
 
         if (st == std::future_status::ready) 
@@ -217,7 +217,7 @@ void BaseSystem::initialize()
 
 
     
-    // // bool succ = load_records(); // continue simulating from the records
+    // // bool succ = load_records(); // 从记录继续模拟
     // timestep = 0;
     // curr_states = starts;
 
@@ -274,7 +274,7 @@ void BaseSystem::initialize()
 void BaseSystem::saveResults(const string &fileName, int screen, bool pretty_print) const
 {
     json js;
-    // Save action model
+    // 保存动作模型
     js["actionModel"] = "MAPF_T";
     js["version"] = "2026 LoRR";
 
@@ -292,7 +292,7 @@ void BaseSystem::saveResults(const string &fileName, int screen, bool pretty_pri
     js["agentMaxCounter"] = simulator.get_max_counter();
     js["outputSegmentSize"]=simulator.get_chunk_size();
 
-    // Save start locations[x,y,orientation]
+    // 保存起始位置[x,y,orientation]
     if (screen <= 2)
     {
         js["delayIntervals"] = simulator.delay_intervals_to_json();
@@ -306,7 +306,7 @@ void BaseSystem::saveResults(const string &fileName, int screen, bool pretty_pri
 
     if (screen <= 2)
     {
-        // Save events
+        // 保存事件
         json event = json::array();
         for(auto e: task_manager.events)
         {
@@ -324,7 +324,7 @@ void BaseSystem::saveResults(const string &fileName, int screen, bool pretty_pri
         }
         js["events"] = event;
 
-        // Save all tasks
+        // 保存所有任务
         json tasks = task_manager.to_json(map.cols);
         js["tasks"] = tasks;
     }
@@ -338,7 +338,7 @@ void BaseSystem::saveResults(const string &fileName, int screen, bool pretty_pri
             planning_times.push_back(time);
         js["plannerTimes"] = planning_times;
 
-        // Save errors
+        // 保存错误
         js["errors"] = simulator.action_errors_to_json();
 
         //actual schedules
@@ -396,7 +396,7 @@ void BaseSystem::saveResults(const string &fileName, int screen, bool pretty_pri
 
         js["plannerSchedule"] = pschedules;
 
-        // Save errors
+        // 保存错误
         json schedule_errors = json::array();
         for (auto error: task_manager.schedule_errors)
         {

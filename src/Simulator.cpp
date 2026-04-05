@@ -34,7 +34,7 @@ vector<State> Simulator::move(int move_time_limit) //move one single 100ms step
     // cout<<"timestep "<<timestep<<endl;
     //first call executor to get next execution command for each agent based on current state and staged actions
     std::vector<ExecutionCommand> agent_command;
-    // reserve space for the executor to write commands
+    // 为 executor 预留空间以写入命令
     agent_command.resize(num_of_agents);
 
     auto process_start = std::chrono::steady_clock::now();
@@ -244,7 +244,7 @@ void Simulator::validate_actions_with_delay(vector<Action>& actions)
 
 void Simulator::sync_shared_env(SharedEnvironment* env) 
 {
-    // update the shared environment with simulator's current state
+    // 使用模拟器的当前状态更新共享环境
     env->curr_states = predict_states;
     env->system_states = curr_states;
     env->start_states = predict_states;
@@ -254,7 +254,7 @@ void Simulator::sync_shared_env(SharedEnvironment* env)
     env->staged_actions = staged_actions;
     
 
-    // make sure executor uses the same shared environment
+    // 确保 executor 使用相同的共享环境
     if (executor != nullptr)
     {
         executor->env = env;
@@ -263,7 +263,7 @@ void Simulator::sync_shared_env(SharedEnvironment* env)
 
 json Simulator::actual_path_to_json() const
 {
-    // Save actual paths
+    // 保存实际路径
     json apaths = json::array();
     for (int i = 0; i < num_of_agents; i++)
     {
@@ -426,7 +426,7 @@ json Simulator::starts_to_json() const
 
 json Simulator::action_errors_to_json() const
 {
-    // Save errors
+    // 保存错误
     json errors = json::array();
     for (auto error: model->errors)
     {

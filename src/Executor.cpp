@@ -23,7 +23,7 @@ void Executor::initialize(int preprocess_time_limit)
 
 vector<State> Executor::process_new_plan(int sync_time_limit, Plan& plan_struct, vector<vector<Action>> & staged_actions)
 {
-    // Default implementation: always append, update the predicted states based on moves
+    // 默认实现：总是追加，基于移动更新预测状态
     if (predicted_states.size() != env->num_of_agents)
     {
         predicted_states = env->system_states;
@@ -131,7 +131,7 @@ void Executor::next_command(int exec_time_limit, std::vector<ExecutionCommand> &
     //temp_tpg = tpg; //copy the tpg to temp_tpg for current timestep processing, we will update temp_tpg during mcp but keep tpg unchanged
     for (int i = 0; i < env->system_states.size(); i++)
     {
-        // always try to go and clear orders because we don't know the current delay
+        // 总是尝试移动并清除顺序，因为我们不知道当前的延迟情况
         if (!decided[i])
             mcp(i, decided, agent_command);
     }

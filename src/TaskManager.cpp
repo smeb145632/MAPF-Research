@@ -6,10 +6,9 @@
 using json = nlohmann::ordered_json;
 
 /**
- * This function validates the proposed schedule (assignment) from participants
- * 
- * @param assignment a vector of task_ids, one for each agent. The length of the vector should be equal to the number of agents.
+ * 此函数用于验证参赛者提出的调度方案（任务分配）
  *
+ * @param assignment 任务ID向量，每个agent对应一个任务ID，向量长度应等于agent数量
  */
 bool TaskManager::validate_task_assignment(vector<int>& assignment)
 {
@@ -73,12 +72,10 @@ bool TaskManager::validate_task_assignment(vector<int>& assignment)
 
 
 /**
- * This function updates the current task assignments of agents.
- * It first checks if the proposed assignment is valid, 
- * then updates the current assignment and updates the corresponding agent_assigned of each affected task.
- * 
- * @param assignment a vector of task_ids, one for each agent. The length of the vector should be equal to the number of agents.
+ * 此函数用于更新 agent 的当前任务分配。
+ * 它首先检查提议的分配是否有效，然后更新当前分配并更新每个受影响任务的相应 agent_assigned。
  *
+ * @param assignment 任务ID向量，每个agent对应一个任务ID，向量长度应等于agent数量
  */
 bool TaskManager::set_task_assignment(vector< int>& assignment)
 {
@@ -126,11 +123,11 @@ bool TaskManager::set_task_assignment(vector< int>& assignment)
 }
 
 /**
- * This function checks if any task is finished at the current timestep.
- * If a task is finished, it updates the task's completion time and the agent's current assignment.
- * 
- * @param states a vector of states of all agents, including the current location of each agent on the map.
- * @param timestep the current timestep.
+ * 此函数用于检查当前时间步是否有任务完成。
+ * 如果任务完成，则更新任务的完成时间和 agent 的当前分配。
+ *
+ * @param states 所有agent的状态向量，包括每个agent在地图上的当前位置
+ * @param timestep 当前时间步
  */
 list<int> TaskManager::check_finished_tasks(vector<State>& states, int timestep)
 { 
@@ -164,10 +161,10 @@ list<int> TaskManager::check_finished_tasks(vector<State>& states, int timestep)
 }
 
 /**
- * This function synchronises the shared environment with the current task manager.
- * It copies the current task pool, current task schedule, new free agents, and new tasks to the shared environment.
- * 
- * @param env a pointer to the shared environment.
+ * 此函数用于将共享环境与当前任务管理器同步。
+ * 它将当前任务池、当前任务调度、新空闲的agent和新任务复制到共享环境。
+ *
+ * @param env 指向共享环境的指针
  */
 void TaskManager::sync_shared_env(SharedEnvironment* env) 
 {
@@ -182,11 +179,10 @@ void TaskManager::sync_shared_env(SharedEnvironment* env)
 }
 
 /**
- * This function reveals new tasks at the current timestep.
- * It reveals a fixed number of tasks at each timestep, 
- * and adds them to the ongoing tasks, new_tasks, and all_tasks.
- * 
- * @param timestep the current timestep.
+ * 此函数用于在当前时间步揭示新任务。
+ * 它在每个时间步揭示固定数量的任务，并将它们添加到进行中的任务、新任务和所有任务列表中。
+ *
+ * @param timestep 当前时间步
  */
 void TaskManager::reveal_tasks(int timestep)
 {
@@ -205,14 +201,14 @@ void TaskManager::reveal_tasks(int timestep)
 }
 
 /**
- * This function is reponsible for the task management process:
- * 1. It updates the current assignments of agents with proposed schedule from participants.
- * 2. It checks if any task is finished at the current timestep.
- * 3. It reveals new tasks at the current timestep.
- * 
- * @param states a vector of states of all agents, including the current location of each agent on the map.
- * @param assignment a vector of task_ids, one for each agent. The length of the vector should be equal to the number of agents.
- * @param timestep the current timestep.
+ * 此函数负责任务管理流程：
+ * 1. 使用参赛者提出的调度方案更新agent的当前分配
+ * 2. 检查当前时间步是否有任务完成
+ * 3. 在当前时间步揭示新任务
+ *
+ * @param states 所有agent的状态向量，包括每个agent在地图上的当前位置
+ * @param assignment 任务ID向量，每个agent对应一个任务ID，向量长度应等于agent数量
+ * @param timestep 当前时间步
  */
 void TaskManager::update_tasks(vector<State>& states, vector<int>& assignment, int timestep)
 {
@@ -227,9 +223,9 @@ void TaskManager::update_tasks(vector<State>& states, vector<int>& assignment, i
 }
 
 /**
- * This function converts all tasks to a JSON object.
- * 
- * @param map_cols the number of columns in the map.
+ * 此函数将所有任务转换为 JSON 对象
+ *
+ * @param map_cols 地图的列数
  */
 json TaskManager::to_json(int map_cols) const
 {

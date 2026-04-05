@@ -508,7 +508,7 @@ vector<ActionModelWithRotate::RealLocation> ActionModelWithRotate::get_real_loca
         float x = static_cast<float>(col);
         float y = static_cast<float>(row);
 
-        // Only Transition states produce translational offset; rotations keep the agent in its grid cell.
+        // 仅 Transition 状态产生平移偏移；旋转动作使 agent 保持在网格单元内。
         if (s.moveType == State::Transition && s.counter.maxCount > 0 && s.counter.count > 0)
         {
             const float frac = static_cast<float>(s.counter.count) / static_cast<float>(s.counter.maxCount);
@@ -542,7 +542,7 @@ void ActionModelWithRotate::sanity_check_states(const vector<State>& states)
         if (loc < 0 || loc >= rows * cols)
         {
             throw std::runtime_error(
-                "Sanity check failed: agent " + std::to_string(i) + " has invalid grid location");
+                "健康检查失败：agent " + std::to_string(i) + " 的网格位置无效");
         }
 
         Rect r;
@@ -555,7 +555,7 @@ void ActionModelWithRotate::sanity_check_states(const vector<State>& states)
             r.max_x > static_cast<float>(cols) || r.max_y > static_cast<float>(rows))
         {
             throw std::runtime_error(
-                "Sanity check failed: agent " + std::to_string(i) + " overlaps map boundary");
+                "健康检查失败：agent " + std::to_string(i) + " 越过了地图边界");
         }
 
         const int c0 = std::max(0, static_cast<int>(std::floor(r.min_x)));
@@ -577,7 +577,7 @@ void ActionModelWithRotate::sanity_check_states(const vector<State>& states)
                 if (rects_overlap(r, obstacle))
                 {
                     throw std::runtime_error(
-                        "Sanity check failed: agent " + std::to_string(i) + " overlaps hard obstacle");
+                        "健康检查失败：agent " + std::to_string(i) + " 与障碍物重叠");
                 }
             }
         }
@@ -626,8 +626,8 @@ void ActionModelWithRotate::sanity_check_states(const vector<State>& states)
                 if (rects_overlap(ri, rj))
                 {
                     throw std::runtime_error(
-                        "Sanity check failed after dependency resolution: agent " + std::to_string(i) +
-                        " overlaps agent " + std::to_string(j));
+                        "依赖解析后的健康检查失败：agent " + std::to_string(i) +
+                        " 与 agent " + std::to_string(j) + " 发生重叠");
                 }
             }
         }

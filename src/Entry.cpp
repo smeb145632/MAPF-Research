@@ -3,10 +3,10 @@
 #include "utils.h"
 #include "heuristics.h"
 
-// The initialize function will be called by competition system at the preprocessing stage.
-// Implement the initialize functions of the planner and scheduler to load or compute auxiliary data.
-// Note that, this function runs untill preprocess_time_limit (in milliseconds) is reached.
-// This is an offline step, after it completes then evaluation begins.
+// 初始化函数将在预处理阶段被竞赛系统调用。
+// 实现规划器和调度器的初始化函数，用于加载或计算辅助数据。
+// 注意，该函数运行直到达到 preprocess_time_limit（毫秒）才结束。
+// 这是一个离线步骤，完成后评估开始。
 void Entry::initialize(int preprocess_time_limit)
 {
     scheduler->initialize(preprocess_time_limit);
@@ -15,8 +15,8 @@ void Entry::initialize(int preprocess_time_limit)
 
 //The compute function will be called by competition system on each timestep.
 //It computes:
-//  1. a schedule that specifies which agent complete which task.
-//  2. a next action that specifies how each agent should move in the next timestep.
+//  1. 一个调度方案，指定哪个 agent 完成哪个任务
+//  2. 一个下一步动作，指定每个 agent 在下一个时间步应如何移动
 //NB: the parameter time_limit is specified in milliseconds.
 void Entry::compute(int time_limit, Plan & plan, std::vector<int> & proposed_schedule)
 {
@@ -31,13 +31,13 @@ void Entry::compute(int time_limit, Plan & plan, std::vector<int> & proposed_sch
 
 }
 
-// Set the next goal locations for each agent based on the proposed schedule
+// 根据提议的调度方案设置每个 agent 的下一个目标位置
 void Entry::update_goal_locations(std::vector<int> & proposed_schedule)
 {
-    // record the proposed schedule so that we can tell the planner
+    // 记录提议的调度方案，以便我们可以告诉规划器
     env->curr_task_schedule = proposed_schedule;
 
-    // The first unfinished errand/location of each task is the next goal for the assigned agent.
+    // 每个任务的第一个未完成的差事/位置是被分配的 agent 的下一个目标
     for (size_t i = 0; i < proposed_schedule.size(); i++)
     {
         env->goal_locations[i].clear();
