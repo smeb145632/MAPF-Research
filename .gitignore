@@ -8,6 +8,7 @@ test.txt
 python/tmp
 python/__pycache__
 output.json
+output_test.json
 *-build/
 cmake-build-*/
 build*
