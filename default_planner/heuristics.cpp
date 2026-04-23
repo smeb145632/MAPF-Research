@@ -62,15 +62,15 @@ int get_heuristic(HeuristicTable& ht, SharedEnvironment* env, int source, Neighb
 			HNode curr = ht.open.front();
 			ht.open.pop_front();
 
-			
+
 			getNeighborLocs(ns,neighbors,curr.location);
 
-			
+
 			for (int next : neighbors)
 			{
 				cost = curr.value + 1;
 				diff = curr.location - next;
-				
+
 				assert(next >= 0 && next < env->map.size());
 				//set current cost for reversed direction
 
@@ -79,7 +79,7 @@ int get_heuristic(HeuristicTable& ht, SharedEnvironment* env, int source, Neighb
 
 				ht.open.emplace_back(next,0, cost);
 				ht.htable[next] = cost;
-				
+
 			}
 
 			if (source == curr.location)
@@ -107,7 +107,7 @@ int get_h(SharedEnvironment* env, int source, int target){
 void init_dist_2_path(Dist2Path& dp, SharedEnvironment* env, Traj& path){
 	if (dp.dist2path.empty())
 		dp.dist2path.resize(env->map.size(), d2p(0,-1,MAX_TIMESTEP,MAX_TIMESTEP));
-	
+
 	dp.open.clear();
 	dp.label++;
 
@@ -115,13 +115,16 @@ void init_dist_2_path(Dist2Path& dp, SharedEnvironment* env, Traj& path){
     for(int i = path.size()-1; i>=0; i--){
         auto p = path[i];
 		assert(dp.dist2path[p].label != dp.label || dp.dist2path[p].cost == MAX_TIMESTEP);
+		// 将轨迹上的这个点加入待处理队列：{label版本号, 位置, cost=0, togo=剩余步数}
 		dp.open.emplace_back(dp.label,p,0,togo);
+		// 更新 dist2path 数组：这个点到轨迹起点的距离记录下来
 		dp.dist2path[p] = {dp.label,p,0,togo};
-		togo++;
-    }
+		togo++; // 下一个点离终点更远（togo 越来越大）
+	}
 
 }
 
+// traffic-flow 中到达 pair<A,B> 中 A为多少步能到达轨迹上,B为轨迹上多少步能到达终点
 std::pair<int,int> get_source_2_path(Dist2Path& dp, SharedEnvironment* env, int source, Neighbors* ns)
 {
 	if (dp.dist2path[source].label == dp.label && dp.dist2path[source].cost < MAX_TIMESTEP){
@@ -130,7 +133,6 @@ std::pair<int,int> get_source_2_path(Dist2Path& dp, SharedEnvironment* env, int 
 		return std::make_pair(dp.dist2path[source].cost, dp.dist2path[source].togo);
 	}
 
-	
 	std::vector<int> neighbors;
 	int cost;
 
@@ -152,7 +154,7 @@ std::pair<int,int> get_source_2_path(Dist2Path& dp, SharedEnvironment* env, int 
 				continue;
 			dp.open.emplace_back(dp.label,next_location,cost,curr.togo);
 			dp.dist2path[next_location] = {dp.label,next_location,cost,curr.togo};
-			
+
 		}
 		if (source == curr.id){
 			// std::cout<<curr.second.first<<" "<<curr.second.second<<std::endl;

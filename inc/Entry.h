@@ -11,18 +11,18 @@ class Entry
 {
 public:
     SharedEnvironment* env;
-    MAPFPlanner* planner;
-    TaskScheduler* scheduler;
+    MAPFPlanner* mapfPlanner;  // 路径规划器（负责计算 agent 移动路径）
+    TaskScheduler* taskScheduler;  // 任务调度器（负责分配任务给 agents）
 
 	Entry(SharedEnvironment* env): env(env)
     {
-        planner = new MAPFPlanner(env);
+        mapfPlanner = new MAPFPlanner(env);
     };
     Entry()
     {
         env = new SharedEnvironment();
-        planner = new MAPFPlanner(env);
-        scheduler = new TaskScheduler(env);
+        mapfPlanner = new MAPFPlanner(env);
+        taskScheduler = new TaskScheduler(env);
 
     };
 	virtual ~Entry(){delete env;};

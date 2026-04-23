@@ -9,8 +9,8 @@
 // 这是一个离线步骤，完成后评估开始。
 void Entry::initialize(int preprocess_time_limit)
 {
-    scheduler->initialize(preprocess_time_limit);
-    planner->initialize(preprocess_time_limit);
+    taskScheduler->initialize(preprocess_time_limit);
+    mapfPlanner->initialize(preprocess_time_limit);
 }
 
 //The compute function will be called by competition system on each timestep.
@@ -21,13 +21,13 @@ void Entry::initialize(int preprocess_time_limit)
 void Entry::compute(int time_limit, Plan & plan, std::vector<int> & proposed_schedule)
 {
     //call the task scheduler to assign tasks to agents
-    scheduler->plan(time_limit,proposed_schedule);
+    taskScheduler->plan(time_limit,proposed_schedule);
 
     //then update the first unfinished errand/location of tasks for planner reference
     update_goal_locations(proposed_schedule);
     
     //call the planner to compute the actions
-    planner->plan(time_limit,plan);
+    mapfPlanner->plan(time_limit,plan);
 
 }
 

@@ -290,6 +290,15 @@ int main(int argc, char **argv)
     auto input_json_file = vm["inputFile"].as<std::string>();
     json data;
 
+    // 从输入文件路径中提取目录，作为相对文件的基准路径
+    boost::filesystem::path p(input_json_file);
+    boost::filesystem::path dir = p.parent_path();
+    std::string base_folder = dir.string();
+    if (base_folder.size() > 0 && base_folder.back() != '/')
+    {
+        base_folder += "/";
+    }
+
     // 打开并解析输入 JSON 文件
     std::ifstream f(input_json_file);
     try

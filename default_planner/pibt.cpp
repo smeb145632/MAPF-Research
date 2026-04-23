@@ -13,22 +13,22 @@ int get_gp_h(TrajLNS& lns, int ai, int target){
     int min_heuristic;
 
     if (!lns.traj_dists.empty() && !lns.traj_dists[ai].empty())
-        min_heuristic = get_dist_2_path(lns.traj_dists[ai], lns.env, target, &(lns.neighbors));	
+        min_heuristic = get_dist_2_path(lns.traj_dists[ai], lns.env, target, &(lns.neighbors));
     else if (!lns.heuristics[lns.tasks.at(ai)].empty())
         min_heuristic = get_heuristic(lns.heuristics[lns.tasks.at(ai)], lns.env, target, &(lns.neighbors));
     else
         min_heuristic = manhattanDistance(target,lns.tasks.at(ai),lns.env);
-    
+
     return min_heuristic;
 }
 
 bool causalPIBT(int curr_id, int higher_id,std::vector<State>& prev_states,
 	 std::vector<State>& next_states,
-      std::vector<int>& prev_decision, std::vector<int>& decision, 
+      std::vector<int>& prev_decision, std::vector<int>& decision,
 	  std::vector<bool>& occupied, TrajLNS& lns
 	  ){
 	// The PIBT works like a causal PIBT when using MAPF-T model. But a normal PIBT when using MAPF model.
-	
+
 	assert(next_states[curr_id].location == -1);
     int prev_loc = prev_states[curr_id].location;
 	int prev_orientation = prev_states[curr_id].orientation;
@@ -47,6 +47,7 @@ bool causalPIBT(int curr_id, int higher_id,std::vector<State>& prev_states,
 	// for each neighbor of (prev_loc,prev_direction), and a wait copy of current location, generate a successor
 	std::vector<int> neighbors;
 	std::vector<PIBT_C> successors;
+	// 获取 prev_loc 附近的4个点位，会把走不了的删去
 	getNeighborLocs(&(lns.neighbors),neighbors,prev_loc);
 	for (auto& neighbor: neighbors){
 
@@ -62,7 +63,7 @@ bool causalPIBT(int curr_id, int higher_id,std::vector<State>& prev_states,
 	successors.emplace_back(prev_loc, wait_heuristic,-1,rand());
 
 
-	std::sort(successors.begin(), successors.end(), 
+	std::sort(successors.begin(), successors.end(),
 		[&](PIBT_C& a, PIBT_C& b)
 		{
 			int diff[4] = {1,lns.env->cols,-1,-lns.env->cols};
@@ -75,7 +76,7 @@ bool causalPIBT(int curr_id, int higher_id,std::vector<State>& prev_states,
 					// random tie break
 					return a.tie_breaker < b.tie_breaker;
 			}
-			return a.heuristic < b.heuristic; 
+			return a.heuristic < b.heuristic;
 		});
 
 
@@ -83,7 +84,7 @@ bool causalPIBT(int curr_id, int higher_id,std::vector<State>& prev_states,
 		if(occupied[next.location] && !(higher_id == -1 && prev_loc == next.location))
 			continue;
 		assert(validateMove(prev_loc, next.location, lns.env));
-		
+
 		if (next.location == -1)
 			continue;
 		if (decision[next.location] != -1){
@@ -95,7 +96,9 @@ bool causalPIBT(int curr_id, int higher_id,std::vector<State>& prev_states,
 		next_states.at(curr_id) = State(next.location, -1, -1);
 		decision.at(next.location) = curr_id;
 
-        if (prev_decision.at(next.location) != -1 && 
+		// prev_decision  上一帧,别的车准备走入的地方
+		// PIBT只考虑 prev_decision 占用被别的车占用;
+		if (prev_decision.at(next.location) != -1 &&
 			next_states.at(prev_decision.at(next.location)).location == -1){
             int lower_id = prev_decision.at(next.location);
             if (!causalPIBT(lower_id,curr_id,prev_states,next_states, prev_decision,decision, occupied,lns)){
@@ -105,13 +108,13 @@ bool causalPIBT(int curr_id, int higher_id,std::vector<State>& prev_states,
 
         return true;
     }
-
+	// 搜索过后,均没有解,将next_states、decision 重新设置
     next_states.at(curr_id) = State(prev_loc,-1 ,-1);;
-    decision.at(prev_loc) = curr_id;     
+    decision.at(prev_loc) = curr_id;
 
 	#ifndef NDEBUG
 		std::cout<<"false: "<< next_states[curr_id].location<<","<<next_states[curr_id].orientation <<std::endl;
-	#endif   
+	#endif
 
     return false;
 }
@@ -190,12 +193,12 @@ bool moveCheck(int id, std::vector<bool>& checked,
 		return true;
 	actions.at(id) = Action::W;
 	return false;
-	
 
-	
 
-	
-	
+
+
+
+
 }
 
 }
