@@ -185,8 +185,10 @@ s_node astar(SharedEnvironment* env, std::vector<Int4>& flow,
                     if (re(temp_node, *existing)){
                         // 不应该发生！输出错误
                         std::cout << "error in astar: re-expansion" << std::endl;
-                        assert(false);
-                        exit(1);
+                        fflush(stdout);
+                        boost::log::core::get()->set_logging_enabled(false);
+                        fflush(stderr);
+                        std::_Exit(1);
                     }
                 }
             }
@@ -195,9 +197,12 @@ s_node astar(SharedEnvironment* env, std::vector<Int4>& flow,
 
     // 未找到路径？报错
     if (goal_node == nullptr){
+        // H04: 先关闭boost::log，再用fflush和_Exit立即终止（避免任何atexit清理）
         std::cout << "error in astar: no path found " << start << "," << goal << std::endl;
-        assert(false);
-        exit(1);
+        fflush(stdout);
+        boost::log::core::get()->set_logging_enabled(false);
+        fflush(stderr);
+        std::_Exit(1);
     }
 
     // 从目标节点回溯，构建路径
