@@ -7,6 +7,18 @@ namespace DefaultPlanner
     // The default planner compute the end time for traffic flow assignment by subtracting PIBT action time from the time limit.
     const int PIBT_RUNTIME_PER_100_AGENTS = 1;
 
+    // Adaptive PIBT parameters (H03)
+    // Based on scene density and time budget to dynamically adjust PIBT time allocation
+    // ================================================================
+
+    const double PIBT_DENSITY_HIGH_THRESHOLD = 0.7;  // High density threshold
+    const double PIBT_DENSITY_LOW_THRESHOLD = 0.3;   // Low density threshold
+    const double PIBT_DENSITY_FACTOR = 0.5;          // Time adjustment factor based on density
+
+    // Time budget-based adjustment: when time is tight, reduce PIBT time to ensure flow optimization
+    const double PIBT_TIME_BUDGET_THRESHOLD = 0.5;  // Ratio of time limit to consider "tight"
+    const double PIBT_TIME_BUDGET_FACTOR = 0.7;     // Multiplier when time is tight
+
     // Traffic flow assignment end time tolerance in ms.
     // The default planner will end the traffic flow assignment phase this many milliseconds before traffic flow assignment end time.
     const int TRAFFIC_FLOW_ASSIGNMENT_END_TIME_TOLERANCE = 10;
@@ -77,10 +89,6 @@ namespace DefaultPlanner
 
     // Debug logging for LNS (enable with -DLNS_DEBUG_LOG compiler flag)
     // #define LNS_DEBUG_LOG 1  // Uncomment to enable debug output
-
-}
-#endif flag)
-    // #define FW_DEBUG_LOG 1  // Uncomment to enable debug output
 
 }
 #endif
