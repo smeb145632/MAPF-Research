@@ -1,31 +1,22 @@
-// Default planner baseline implementation.
-//
-// For each planning episode, this module updates guide paths with a bounded
-// traffic-flow phase (Frank-Wolfe optimisation), then runs PIBT to produce
-// a multi-step plan. Internal rollout builds future steps; the environment
-// snapshot is restored after planning.
-//
-// References:
-//   Chen, Z., Harabor, D., Li, J., & Stuckey, P. J. (2024). Traffic flow
-//   optimisation for lifelong multi-agent path finding. AAAI Conference on
-//   Artificial Intelligence, Vol. 38, No. 18, pp. 20674-20682.
-//   https://ojs.aaai.org/index.php/AAAI/article/view/30054/31856
-//
-//   Okumura, K., et al. (2022). Priority Inheritance with Backtracking (PIBT)
-//   for iterative multi-agent path finding. Artificial Intelligence, Vol. 310.
-
 #include "planner.h"
 #include "heuristics.h"
 #include "SharedEnv.h"
 #include "pibt.h"
 #include "flow.h"
 #include "const.h"
-#include <chrono>
 #include <iostream>
 
 
 namespace DefaultPlanner{
 
+    // ============================================================
+    // 辅助函数：将 Action 枚举转为字符串（用于调试输出?
+    // ============================================================
+    // Action::FW  = Forward (前进)
+    // Action::CR  = Clockwise Rotate (右转90?
+    // Action::CCR = Counter-Clockwise Rotate (左转90?
+    // Action::W   = Wait (等待)
+    // Action::NA  = Not Available (不可?
     static const char* debug_action_to_string(Action action)
     {
         switch (action)
@@ -39,364 +30,709 @@ namespace DefaultPlanner{
         }
     }
 
-    //default planner data
-    std::vector<int> decision; 
-    std::vector<int> prev_decision;
-    std::vector<double> p;
-    std::vector<State> prev_states;
-    std::vector<State> next_states;
-    std::vector<int> ids;
-    std::vector<double> p_copy;
-    std::vector<bool> occupied;
-    std::vector<DCR> decided;
-    std::vector<bool> checked;
-    std::vector<bool> require_guide_path;
-    std::vector<int> dummy_goals;
-    TrajLNS trajLNS;
-    std::mt19937 mt1;
 
+    // ============================================================
+    // 默认规划器的全局数据
+    // 这些变量在规划过程中维护状态，跨多次调用保?
+    // ============================================================
+
+    std::vector<int> decision;      // decision[位置] = 占用该位置的 agent ID?1 表示空闲?
+    std::vector<int> prev_decision; // 上一帧的 decision（用于碰撞检测）
+    std::vector<double> p;          // 每个 agent 的优先级
+    std::vector<State> prev_states; // agent 上一帧的状?
+    std::vector<State> next_states; // agent 当前帧的状态（规划过程中更新）
+    std::vector<int> ids;           // agent ID 列表 [0,1,2,...,n-1]
+    std::vector<double> p_copy;     // 优先级的备份（用于恢复）
+    std::vector<bool> occupied;     // 位置是否被占用的标记
+    std::vector<DCR> decided;       // 每个 agent?已决定动?状?
+    std::vector<bool> checked;      // 移动检查标?
+    std::vector<bool> require_guide_path;  // 是否需要重新计算引导路?
+    std::vector<int> dummy_goals;   // 虚拟目标（当 agent 没有任务时使用）
+    TrajLNS trajLNS;                // Trajectory LNS 数据结构
+    std::mt19937 mt1;               // 随机数生成器
+
+
+    // ============================================================
+    // rollout_next_state?根据动作计算下一个状?
+    // ============================================================
+    // 作用：根据当前状态和动作，推算出 agent 的下一个状?
+    // 注意：这只是"仿真"计算，不会真正移?agent
+    //
+    // @param state 当前状?
+    // @param action 要执行的动作
+    // @param env 共享环境
+    // @return 执行动作后的新状?
     static State rollout_next_state(const State& state, Action action, const SharedEnvironment* env)
     {
         State next = state;
-        next.timestep = state.timestep + 1;
+        next.timestep = state.timestep + 1;  // 时间?+1
 
+        // ----------------------------------------
+        // 处理旋转动作（不改变位置，只改变朝向?
+        // ----------------------------------------
         if (action == Action::CR)
         {
+            // 右转?当前朝向 + 1) % 4
+            // 0=? 1=? 2=? 3=?
             next.orientation = (state.orientation + 1) % 4;
             return next;
         }
         if (action == Action::CCR)
         {
+            // 左转?当前朝向 + 3) % 4
             next.orientation = (state.orientation + 3) % 4;
             return next;
         }
         if (action != Action::FW)
         {
+            // 非前进动作（等待等），位置不?
             return next;
         }
 
+        // ----------------------------------------
+        // 处理前进动作
+        // ----------------------------------------
+        // 计算朝向对应的位置增?
+        //   0(?: delta = +1 (?1，向?
+        //   1(?: delta = +cols (?1，向?
+        //   2(?: delta = -1 (?1，向?
+        //   3(?: delta = -cols (?1，向?
         int delta = 0;
         if (state.orientation == 0) delta = 1;
         if (state.orientation == 1) delta = env->cols;
         if (state.orientation == 2) delta = -1;
         if (state.orientation == 3) delta = -env->cols;
 
+        // 计算下一个位?
         int next_loc = state.location + delta;
+
+        // 检查移动是否有效（边界内且不是障碍物）
         if (next_loc >= 0 && next_loc < env->map.size() && validateMove(state.location, next_loc, env))
         {
-            next.location = next_loc;
+            next.location = next_loc;  // 位置更新
         }
+        // 如果无效，位置保持不变（agent 撞墙了）
         return next;
     }
 
+
+    // ============================================================
+    // initialize_dummy_goals?初始化虚拟目?
+    // ============================================================
+    // 作用：当 agent 没有分配到任务时，使用当前位置作为虚拟目?
+    // 只在时间?0 时调用一?
     static void initialize_dummy_goals_if_needed(SharedEnvironment* env)
     {
+        // 只在仿真开始时初始?
         if (env->curr_timestep != 0)
             return;
+
         dummy_goals.resize(env->num_of_agents);
-        for(int i=0; i<env->num_of_agents; i++)
+        for(int i = 0; i < env->num_of_agents; i++)
         {
-            dummy_goals.at(i) = env->start_states.at(i).location;
+            // 虚拟目标 = agent 的起始位?
+            dummy_goals.at(i) = env->curr_states.at(i).location;
         }
     }
 
+
+    // ============================================================
+    // setup_multistep_episode_state?设置多步规划场景状?
+    // ============================================================
+    // 作用?
+    //   1. 初始化启发式?
+    //   2. 为每?agent 设置任务/目标
+    //   3. 检测引导路径是否需要更?
+    //   4. 更新 agent 的优先级
     static void setup_multistep_episode_state(SharedEnvironment* env, TimePoint flow_end_time,
-                                              std::vector<double>& local_priority)
+	                                              std::vector<double>& local_priority)
     {
         prev_decision.clear();
-        prev_decision.resize(env->map.size(), -1);
-        for(int i=0; i<env->num_of_agents; i++)
+        prev_decision.resize(env->map.size(), -1);  // 所有位置初始为空闲
+
+        // ----------------------------------------
+        // 遍历每个 agent
+        // ----------------------------------------
+        for(int i = 0; i < env->num_of_agents; i++)
         {
-            // initialise heuristic tables for goals
-            if (std::chrono::steady_clock::now() < flow_end_time){
-                for (int j = 0; j < env->goal_locations[i].size(); j++)
+            // 1. 如果时间还够，初始化目标位置的启发式?
+            if (std::chrono::steady_clock::now() < flow_end_time)
+            {
+                for(int j = 0; j < env->goal_locations[i].size(); j++)
                 {
                     int goal_loc = env->goal_locations[i][j].first;
-                    if (trajLNS.heuristics.find(goal_loc) == trajLNS.heuristics.end() ||
-                        trajLNS.heuristics[goal_loc].empty()){
+                    if (trajLNS.heuristics.at(goal_loc).empty())
+                    {
+                        // 为这个目标位置初始化启发式距离表
                         init_heuristic(trajLNS.heuristics[goal_loc], env, goal_loc);
                     }
                 }
             }
 
-            // set goals/tasks
-            if (env->goal_locations[i].empty()){
+            // 2. 设置 agent 的任?目标
+            if (env->goal_locations[i].empty())
+            {
+                // 没有任务?使用虚拟目标（当前位置）
                 trajLNS.tasks[i] = dummy_goals.at(i);
-                local_priority[i] = p_copy[i];
+                local_priority[i] = p_copy[i];  // 优先级恢复默认?
             }
-            else{
+            else
+            {
+                // 有任?使用任务的下一?errand 作为目标
                 trajLNS.tasks[i] = env->goal_locations[i].front().first;
             }
 
-            // detect guide-path mismatch (goal changed or no guide path)
+            // 3. 检测引导路径是否需要重新计?
+            // 如果目标改变了，或者没有引导路径，就需要重新计?
             require_guide_path[i] = false;
             if (trajLNS.trajs[i].empty() || trajLNS.trajs[i].back() != trajLNS.tasks[i])
                 require_guide_path[i] = true;
 
-            // update per-agent transient planning state
-            assert(env->start_states[i].location >=0);
-            prev_states[i] = env->start_states[i];
-            next_states[i] = State();
-            prev_decision[env->start_states[i].location] = i;
-            if (decided[i].loc == -1){
-                decided[i].loc = env->start_states[i].location;
+            // 4. 更新 agent 的规划状?
+            assert(env->curr_states[i].location >= 0);
+            prev_states[i] = env->curr_states[i];  // 记录上一帧状?
+            next_states[i] = State();              // 重置下一帧状?
+            // 标记当前位置被此 agent 占用
+            prev_decision[env->curr_states[i].location] = i;
+
+            // 5. 处理"已决定动?状?
+            if (decided[i].loc == -1)
+            {
+                decided[i].loc = env->curr_states[i].location;
                 assert(decided[i].state == DONE::DONE);
             }
-            if (prev_states[i].location == decided[i].loc){
-                decided[i].state = DONE::DONE;
+            if (prev_states[i].location == decided[i].loc)
+            {
+                decided[i].state = DONE::DONE;  // agent 到达了之前决定的位置
             }
-            if (decided[i].state == DONE::NOT_DONE){
+            if (decided[i].state == DONE::NOT_DONE)
+            {
+                // agent 还在执行之前的决?
                 decision.at(decided[i].loc) = i;
-                next_states[i] = State(decided[i].loc,-1,-1);
+                next_states[i] = State(decided[i].loc, -1, -1);
             }
 
-            // cross-episode priority update
-            if(require_guide_path[i])
-                local_priority[i] = p_copy[i];
+            // 6.?episode 更新优先?
+            if (require_guide_path[i])
+                local_priority[i] = p_copy[i];  // 需要重新规划，恢复基础优先?
             else if (!env->goal_locations[i].empty())
-                local_priority[i] = local_priority[i]+1;
+                local_priority[i] = local_priority[i] + 1;  // 已有引导路径，优先级+1
 
-            if (!env->goal_locations[i].empty() && trajLNS.neighbors[env->start_states[i].location].size() == 1){
+            // 7. 如果 agent 处于死角（只有一个邻居），优先级大幅提升
+            if (!env->goal_locations[i].empty() && trajLNS.neighbors[env->curr_states[i].location].size() == 1)
+            {
                 local_priority[i] = local_priority[i] + 10;
             }
         }
     }
 
+
+    // ============================================================
+    // update_guide_paths_once_for_multistep?更新引导路径（一次性）
+    // ============================================================
+    // 作用?
+    //   1. 为目标改变的 agent 更新引导路径
+    //   2. 运行 Frank-Wolfe 优化流量分配
+    //
+    // 引导路径 = 从当前位置到目标的预计算最短路?
     static void update_guide_paths_once_for_multistep(SharedEnvironment* env, TimePoint flow_end_time)
     {
-        // one-time guide-path update for goal-changed agents
+        // ----------------------------------------
+        // 1. 为需要重新规划的 agent 更新引导路径
+        // ----------------------------------------
         for (int i = 0; i < env->num_of_agents; i++)
         {
+            // 如果超时，停?
             if (std::chrono::steady_clock::now() > flow_end_time)
                 break;
-            if (require_guide_path[i]){
-                std::vector<int> old_traj = trajLNS.trajs[i];
+
+            // 只为需要更新的 agent 更新
+            if (require_guide_path[i])
+            {
                 if (!trajLNS.trajs[i].empty())
-                    remove_traj(trajLNS, i);
-                if (!update_traj(trajLNS, i, &flow_end_time)){
-                    trajLNS.trajs[i] = old_traj;
-                    if (!old_traj.empty()){
-                        add_traj(trajLNS, i);
-                    }
-                    break;
-                }
+                    remove_traj(trajLNS, i);  // 移除旧轨?
+                update_traj(trajLNS, i);      // 计算新轨?
             }
         }
 
-        // one-time FW optimization in the flow allocation phase
+        // ----------------------------------------
+        // 2. Frank-Wolfe 优化（流量分配阶段的一次性优化）
+        // ----------------------------------------
         std::unordered_set<int> updated;
         frank_wolfe(trajLNS, updated, flow_end_time);
     }
 
+
+    // ============================================================
+    // refresh_multistep_step_state?刷新多步状态（每步调用?
+    // ============================================================
+    // 作用：在每个规划步骤开始时刷新状?
+    //?setup_multistep_episode_state 类似，但更轻?
     static void refresh_multistep_step_state(SharedEnvironment* env, std::vector<double>& local_priority)
     {
         prev_decision.clear();
         prev_decision.resize(env->map.size(), -1);
-        for(int i=0; i<env->num_of_agents; i++)
+
+        for(int i = 0; i < env->num_of_agents; i++)
         {
-            if (env->goal_locations[i].empty()){
+            // 设置任务/目标
+            if (env->goal_locations[i].empty())
+            {
                 trajLNS.tasks[i] = dummy_goals.at(i);
                 local_priority[i] = p_copy[i];
             }
-            else{
+            else
+            {
                 trajLNS.tasks[i] = env->goal_locations[i].front().first;
                 local_priority[i] = local_priority[i] + 1;
             }
 
-            assert(env->start_states[i].location >=0);
-            prev_states[i] = env->start_states[i];
+            assert(env->curr_states[i].location >= 0);
+            prev_states[i] = env->curr_states[i];
             next_states[i] = State();
-            prev_decision[env->start_states[i].location] = i;
+            prev_decision[env->curr_states[i].location] = i;
 
-            if (prev_states[i].location == decided[i].loc){
+            if (prev_states[i].location == decided[i].loc)
+            {
                 decided[i].state = DONE::DONE;
             }
-            if (decided[i].state == DONE::NOT_DONE){
+            if (decided[i].state == DONE::NOT_DONE)
+            {
                 decision.at(decided[i].loc) = i;
-                next_states[i] = State(decided[i].loc,-1,-1);
+                next_states[i] = State(decided[i].loc, -1, -1);
             }
 
-            if (!env->goal_locations[i].empty() && trajLNS.neighbors[env->start_states[i].location].size() == 1){
+            // 死角检?
+            if (!env->goal_locations[i].empty() && trajLNS.neighbors[env->curr_states[i].location].size() == 1)
+            {
                 local_priority[i] = local_priority[i] + 10;
             }
         }
     }
 
+
+    // ============================================================
+    // run_multistep_pibt_once?运行一?PIBT 算法
+    // ============================================================
+    // 作用：为所?agent 决定下一步的动作
+    //
+    // PIBT = Priority Inheritance with Backtracking
+    //        优先级继?+ 回溯的多 agent 路径规划算法
+    //
+    // @param one_step_actions 输出：每?agent 的下一步动?
     static void run_multistep_pibt_once(SharedEnvironment* env, std::vector<double>& local_priority,
                                         std::vector<Action>& one_step_actions)
     {
-        const auto start_time = std::chrono::steady_clock::now();
+        // ----------------------------------------
+        // 1. 按优先级排序 agent（高优先级先规划?
+        // ----------------------------------------
         std::sort(ids.begin(), ids.end(), [&](int a, int b) {
                 return local_priority.at(a) > local_priority.at(b);
             }
         );
-        //clear reset occupied
+
+        // 清空占用标记
         std::fill(occupied.begin(), occupied.end(), false);
 
-        for (int i : ids){
-            if (decided[i].state == DONE::NOT_DONE){
+        // ----------------------------------------
+        // 2. 运行 causalPIBT（因?PIBT?
+        // ----------------------------------------
+        for (int i : ids)
+        {
+            // 跳过已完成当前决定的 agent
+            if (decided[i].state == DONE::NOT_DONE)
+            {
                 continue;
             }
-            if (next_states[i].location==-1){
-                assert(prev_states[i].location >=0 && prev_states[i].location < env->map.size());
-                causalPIBT(i,-1,prev_states,next_states,
-                    prev_decision,decision,
+            // 执行 PIBT
+            if (next_states[i].location == -1)
+            {
+                assert(prev_states[i].location >= 0 && prev_states[i].location < env->map.size());
+                causalPIBT(i, -1, prev_states, next_states,
+                    prev_decision, decision,
                     occupied, trajLNS);
             }
         }
 
+        // ----------------------------------------
+        // 3. 生成最终动?
+        // ----------------------------------------
         one_step_actions.resize(env->num_of_agents);
-        for (int id : ids){
-            if (next_states.at(id).location!= -1)
+        for (int id : ids)
+        {
+            // 释放下一状态占用的位置
+            if (next_states.at(id).location != -1)
                 decision.at(next_states.at(id).location) = -1;
-            if (next_states.at(id).location >=0){
-                decided.at(id) = DCR({next_states.at(id).location,DONE::NOT_DONE});
+
+            // 更新 decided 状?
+            if (next_states.at(id).location >= 0)
+            {
+                decided.at(id) = DCR({next_states.at(id).location, DONE::NOT_DONE});
             }
-            one_step_actions.at(id) = getAction(prev_states.at(id),decided.at(id).loc, env);
+
+            // 根据当前状态和目标位置，决定实际动?
+            one_step_actions.at(id) = getAction(prev_states.at(id), decided.at(id).loc, env);
             checked.at(id) = false;
         }
 
-        for (int id=0;id < env->num_of_agents ; id++){
-            if (!checked.at(id) && one_step_actions.at(id) == Action::FW){
-                moveCheck(id,checked,decided,one_step_actions,prev_decision);
+        // ----------------------------------------
+        // 4. 移动检查（确保 FW 动作不会导致碰撞?
+        // ----------------------------------------
+        for (int id = 0; id < env->num_of_agents; id++)
+        {
+            if (!checked.at(id) && one_step_actions.at(id) == Action::FW)
+            {
+                moveCheck(id, checked, decided, one_step_actions, prev_decision);
             }
         }
 
+        // 保存当前状态供下一帧使?
         prev_states = next_states;
-
-        const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - start_time).count();
     }
 
+
+    // ============================================================
+    // append_actions_and_rollout_states?保存动作并更新状?
+    // ============================================================
+    // 作用?
+    //   1. 将本步动作追加到动作序列
+    //   2. 仿真更新 agent 状态（用于内部 rollout?
+    //
+    // 注意：这只是"仿真"状态，不会影响实际?SharedEnvironment
     static void append_actions_and_rollout_states(SharedEnvironment* env,
                                                    std::vector<std::vector<Action>> & actions,
                                                    const std::vector<Action>& one_step_actions)
     {
-        for (int aid = 0; aid < env->num_of_agents; aid++){
+        // ----------------------------------------
+        // 1. 追加动作到每?agent 的动作序?
+        // ----------------------------------------
+        for (int aid = 0; aid < env->num_of_agents; aid++)
+        {
             actions[aid].push_back(one_step_actions[aid]);
         }
 
+        // ----------------------------------------
+        // 2. 仿真更新状态（rollout?
+        // ----------------------------------------
         std::vector<State> rolled_states(env->num_of_agents);
-        for (int aid = 0; aid < env->num_of_agents; aid++){
-            rolled_states[aid] = rollout_next_state(env->start_states[aid], one_step_actions[aid], env);
+        for (int aid = 0; aid < env->num_of_agents; aid++)
+        {
+            // 根据动作计算下一状?
+            rolled_states[aid] = rollout_next_state(env->curr_states[aid], one_step_actions[aid], env);
         }
-        env->start_states = rolled_states;
+
+        // 保存 rollout 后的状?
+        env->curr_states = rolled_states;
         env->curr_timestep += 1;
     }
 
-    /**
-     * @brief Default planner initialization
-     * 
-     * @param preprocess_time_limit time limit for preprocessing in milliseconds
-     * @param env shared environment object
-     * 
-     * The initialization function initializes the default planner data structures and heuristics tables.
-     */
-    void initialize(int preprocess_time_limit, SharedEnvironment* env){
-            //initialise all required data structures
-            assert(env->num_of_agents != 0);
-            p.resize(env->num_of_agents);
-            decision.resize(env->map.size(), -1);
-            prev_states.resize(env->num_of_agents);
-            next_states.resize(env->num_of_agents);
-            decided.resize(env->num_of_agents,DCR({-1,DONE::DONE}));
-            occupied.resize(env->map.size(),false);
-            checked.resize(env->num_of_agents,false);
-            ids.resize(env->num_of_agents);
-            require_guide_path.resize(env->num_of_agents,false);
-            for (int i = 0; i < ids.size();i++){
-                ids[i] = i;
-            }
 
-            // initialise the heuristics tables containers
-            init_heuristics(env);
-            mt1.seed(0);
-            srand(0);
+    // ============================================================
+    // initialize?规划器预处理初始?
+    // ============================================================
+    // 作用：在仿真开始前初始化规划器的数据结构和启发式表
+    //
+    // @param preprocess_time_limit 预处理时间限制（毫秒?
+    // @param env 共享环境
+    void initialize(int preprocess_time_limit, SharedEnvironment* env)
+    {
+        // ----------------------------------------
+        // 1. 初始化所有数据结?
+        // ----------------------------------------
+        assert(env->num_of_agents != 0);
 
-            new (&trajLNS) TrajLNS(env, global_heuristictable, global_neighbors);
-            trajLNS.init_mem();
+        p.resize(env->num_of_agents);                    // 优先?
+        decision.resize(env->map.size(), -1);           // 位置占用?
+        prev_states.resize(env->num_of_agents);          // 上一帧状?
+        next_states.resize(env->num_of_agents);           // 当前帧状?
+        decided.resize(env->num_of_agents, DCR({-1, DONE::DONE}));  // 已决定状?
+        occupied.resize(env->map.size(), false);         // 位置占用标记
+        checked.resize(env->num_of_agents, false);       // 检查标?
+        ids.resize(env->num_of_agents);                  // agent ID 列表
+        require_guide_path.resize(env->num_of_agents, false);  // 引导路径需?
+        // ids = [0, 1, 2, ..., num_of_agents-1]
+        for (int i = 0; i < ids.size(); i++)
+        {
+            ids[i] = i;
+        }
 
-            //assign intial priority to each agent
-            std::shuffle(ids.begin(), ids.end(), mt1);
-            for (int i = 0; i < ids.size();i++){
-                p[ids[i]] = ((double)(ids.size() - i))/((double)(ids.size()+1));
-            }
-            p_copy = p;
-            return;
+        // ----------------------------------------
+        // 2. 初始化启发式距离?
+        // ----------------------------------------
+        init_heuristics(env);
+
+        // 设置随机种子（保证结果可复现?
+        mt1.seed(0);
+        srand(0);
+
+        // ----------------------------------------
+        // 3. 初始?TrajLNS 数据结构
+        // ----------------------------------------
+        new (&trajLNS) TrajLNS(env, global_heuristictable, global_neighbors);
+        trajLNS.init_mem();
+
+        // ----------------------------------------
+        // 4. 分配初始优先?
+        // ----------------------------------------
+        std::shuffle(ids.begin(), ids.end(), mt1);  // 随机打乱顺序
+        for (int i = 0; i < ids.size(); i++)
+        {
+            // 优先?= (n - i) / (n + 1)
+            // 打乱后，排在前面?agent 优先级更?
+            p[ids[i]] = ((double)(ids.size() - i)) / ((double)(ids.size() + 1));
+        }
+        p_copy = p;  // 保存优先级副?
+        return;
     };
 
-    /**
-     * @brief Default planner plan function
-     * 
-     * @param time_limit time limit for planning in milliseconds
-     * @param actions vector of actions to be populated by the planner
-     * @param env shared environment object
-     * @param num_steps number of steps to plan
-     * 
-     * The plan function is the main function of the default planner. 
-     * It computes the actions for the agents based on the current state of the environment.
-     * The function first checks assignments/goal location changes and perform the necessary updates.
-     * It then computes and optimises traffic flow optimised guide paths for the agents.
-     * Finally, it computes the actions for the agents using PIBT that follows the guide path heuristics and returns the actions.
-     * Note that the default planner ignores the turning action costs, and post-processes turning actions as additional delays on top of original plan.
-     */
+
+    // ============================================================
+    // plan?默认规划器的主函?
+    // ============================================================
+    // 作用：为所?agent 规划接下?num_steps 步的动作
+    //
+    // 算法流程?
+    //   1. 检查任?目标变化，执行必要的更新
+    //   2. 计算并优化流量分配的引导路径
+    //   3. 使用 PIBT 算法为每?agent 决定动作
+    //
+    // @param time_limit 规划时间限制（毫秒）
+    // @param actions 输出：每?agent 的动作序?
+    // @param env 共享环境
+    // @param num_steps 要规划的步数
+    //
+    // 注意：默认规划器忽略转向动作的成本，转向动作会被处理为额外的延迟
     void plan(int time_limit, std::vector<std::vector<Action>> & actions,
-                         SharedEnvironment* env, int num_steps){
+                         SharedEnvironment* env, int num_steps)
+    {
         actions.clear();
-        //cout<<"num of steps to plan "<<num_steps<<endl;
-        if (env == nullptr || env->num_of_agents <= 0){
+
+        // 检查参数有效?
+        if (env == nullptr || env->num_of_agents <= 0)
+        {
             return;
         }
 
         actions.resize(env->num_of_agents);
-        if (num_steps <= 0){
+        if (num_steps <= 0)
+        {
             return;
         }
 
-        const auto episode_start = std::chrono::steady_clock::now();
-        const TimePoint episode_deadline = episode_start + std::chrono::milliseconds(std::max(0, time_limit));
-        int pibt_time = PIBT_RUNTIME_PER_100_AGENTS * env->num_of_agents/100;
-        if (pibt_time <= 0){
-            pibt_time = 1;
+        // ----------------------------------------
+        // 动态调整规划步数（根据任务密度?
+        // 高密?减少步数节省内存
+        // 低密?增加步数提升效率
+        // ----------------------------------------
+        if (ENABLE_DYNAMIC_STAGED_CACHE)
+        {
+            int busy_agents = 0;
+            for (int i = 0; i < env->num_of_agents; i++)
+            {
+                if (!env->goal_locations[i].empty())
+                {
+                    busy_agents++;
+                }
+            }
+            double density = (double)busy_agents / env->num_of_agents;
+            
+            int adjusted_steps = num_steps;
+            if (density > HIGH_DENSITY_THRESHOLD)
+            {
+                // 高密度：减少步数
+                adjusted_steps = MIN_DYNAMIC_STEPS + (int)(DENSITY_FACTOR * (1.0 - density));
+                if (adjusted_steps < MIN_DYNAMIC_STEPS) adjusted_steps = MIN_DYNAMIC_STEPS;
+            }
+            else if (density < LOW_DENSITY_THRESHOLD)
+            {
+                // 低密度：增加步数
+                adjusted_steps = MAX_DYNAMIC_STEPS - (int)(DENSITY_FACTOR * density);
+                if (adjusted_steps > MAX_DYNAMIC_STEPS) adjusted_steps = MAX_DYNAMIC_STEPS;
+            }
+            
+            if (adjusted_steps != num_steps)
+            {
+                std::cout << "[DefaultPlanner::plan] dynamic steps: num_steps " << num_steps 
+                          << " -> " << adjusted_steps << " (density=" << density << ")" << std::endl;
+                num_steps = adjusted_steps;
+            }
         }
-        const int flow_budget_ms = std::max(0, time_limit - std::max(MIN_PIBT_TIME, pibt_time * num_steps) - TRAFFIC_FLOW_ASSIGNMENT_END_TIME_TOLERANCE);
+
+        // ----------------------------------------
+        // 计算时间预算
+        // ----------------------------------------
+        const auto episode_start = std::chrono::steady_clock::now();
+
+        // 计算任务密度（busy_agents / total_agents）
+        int busy_agents = 0;
+        for (int i = 0; i < env->num_of_agents; i++)
+        {
+            if (!env->goal_locations[i].empty())
+            {
+                busy_agents++;
+            }
+        }
+        double task_density = (double)busy_agents / env->num_of_agents;
+        
+        // 自适应 PIBT 时间预算计算 (H03)
+        int base_pibt_time = PIBT_RUNTIME_PER_100_AGENTS * env->num_of_agents / 100;
+        if (base_pibt_time <= 0)
+        {
+            base_pibt_time = 1;
+        }
+        
+        // 根据密度调整：密度高时减少PIBT时间，密度低时增加
+        double density_multiplier = 1.0;
+        if (task_density > PIBT_DENSITY_HIGH_THRESHOLD)
+        {
+            // 高密度：减少PIBT时间以增加重规划频率
+            density_multiplier = 1.0 - PIBT_DENSITY_FACTOR * (task_density - PIBT_DENSITY_HIGH_THRESHOLD) / (1.0 - PIBT_DENSITY_HIGH_THRESHOLD);
+            if (density_multiplier < 0.5) density_multiplier = 0.5;  // 最小50%
+        }
+        else if (task_density < PIBT_DENSITY_LOW_THRESHOLD)
+        {
+            // 低密度：可以增加PIBT时间以获得更好的路径质量
+            density_multiplier = 1.0 + PIBT_DENSITY_FACTOR * (PIBT_DENSITY_LOW_THRESHOLD - task_density) / PIBT_DENSITY_LOW_THRESHOLD;
+            if (density_multiplier > 1.5) density_multiplier = 1.5;  // 最大150%
+        }
+        
+        // 根据时间预算调整：当时间紧张时减少PIBT时间
+        double time_budget_ratio = (double)time_limit / 1000.0;  // 假设正常时间limit约1-2秒
+        double time_multiplier = 1.0;
+        if (time_budget_ratio < PIBT_TIME_BUDGET_THRESHOLD)
+        {
+            // 时间紧张：减少PIBT时间，确保flow优化能执行
+            time_multiplier = PIBT_TIME_BUDGET_FACTOR;
+        }
+        
+        // 最终 PIBT 时间
+        int pibt_time = (int)(base_pibt_time * density_multiplier * time_multiplier);
+        if (pibt_time <= 0) pibt_time = 1;
+        
+        // 调试输出密度和时间预算信息
+        std::cout << "[DefaultPlanner::plan] H03 adaptive: task_density=" << task_density 
+                  << ", density_mult=" << density_multiplier 
+                  << ", time_mult=" << time_multiplier
+                  << ", pibt_time=" << pibt_time << "ms" << std::endl;
+
+        // Flow 优化时间预算 = 总时?- PIBT时间 - 容差
+        const int flow_budget_ms = std::max(0, time_limit - pibt_time * num_steps - TRAFFIC_FLOW_ASSIGNMENT_END_TIME_TOLERANCE);
         TimePoint flow_end_time = episode_start + std::chrono::milliseconds(flow_budget_ms);
 
         std::vector<double> local_priority = p;
 
-        const std::vector<State> original_states = env->start_states;
+        // 保存原始状态（用于内部 rollout 后恢复）
+        const std::vector<State> original_states = env->curr_states;
         const int original_timestep = env->curr_timestep;
         const std::vector<DCR> original_decided = decided;
 
-        // Fresh execution tracking for each multi-step planning episode:
-        // no ongoing orientation-compensation actions are carried across episodes.
+        // ----------------------------------------
+        // 每个多步规划 episode 的初始化
+        // 注意：跨 episode 不保留未完成的转向补偿动?
+        // ----------------------------------------
         decided.assign(env->num_of_agents, DCR({-1, DONE::DONE}));
 
-        // --- One-time setup for this planning episode ---
-        initialize_dummy_goals_if_needed(env);
-        setup_multistep_episode_state(env, flow_end_time, local_priority);
+        // --- 一次性设?---
+        initialize_dummy_goals_if_needed(env);                           // 初始化虚拟目?
+        setup_multistep_episode_state(env, flow_end_time, local_priority);  // 设置场景状?
+        // 更新引导路径, traffic-flow流程、加上轨迹偏离地图搜索后、通过偏移排序重新规划一?知道time-end;
         update_guide_paths_once_for_multistep(env, flow_end_time);
 
+        // 记录设置阶段耗时
         const auto after_setup = std::chrono::steady_clock::now();
         const auto setup_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(after_setup - episode_start).count();
-        // commit only cross-episode priority update (internal rollout keeps using local_priority only)
+        std::cout << "[DefaultPlanner::plan] timing: time_limit=" << time_limit
+              << "ms, pibt_time_hint=" << pibt_time
+              << "ms, flow_budget=" << flow_budget_ms
+              << "ms, setup_elapsed=" << setup_elapsed_ms << "ms" << std::endl;
+
+        // 提交?episode 的优先级更新
         p = local_priority;
 
-        for (int step = 0; step < num_steps; step++){
-            if (std::chrono::steady_clock::now() >= episode_deadline){
-                break;
-            }
+        // ----------------------------------------
+        // 多步规划循环
+        // ----------------------------------------
+        for (int step = 0; step < num_steps; step++)
+        {
             std::vector<Action> one_step_actions;
-            // After step 0, only run PIBT + rollout (no guide path recompute and no FW)
-            if (step > 0){
+
+            //?step 1 开始，只需?PIBT + rollout（不需要重新计算引导路径和 FW?
+            if (step > 0)
+            {
                 refresh_multistep_step_state(env, local_priority);
             }
+
+            // 运行一?PIBT
             run_multistep_pibt_once(env, local_priority, one_step_actions);
+
+            // 保存动作并更新状?
             append_actions_and_rollout_states(env, actions, one_step_actions);
         }
 
-        // restore env state after internal rollout simulation
-        env->start_states = original_states;
+        // ----------------------------------------
+        // 调试输出（仅 agent 47?
+        // ----------------------------------------
+        std::cout << "[DefaultPlanner::plan] computed actions for "
+                  << env->num_of_agents << " agents over " << num_steps << " steps" << std::endl;
+        for (int aid = 0; aid < env->num_of_agents; aid++)
+        {
+            if (aid != 47) continue;  // 只输?agent 47 的信?
+            int curr_loc = env->curr_states[aid].location;
+            int goal_loc = -1;
+            if (!env->goal_locations[aid].empty())
+            {
+                goal_loc = env->goal_locations[aid].front().first;
+            }
+
+            // 获取分配的任务信?
+            int assigned_task_id = -1;
+            std::string task_details = "N/A";
+            if (aid < env->curr_task_schedule.size())
+            {
+                assigned_task_id = env->curr_task_schedule[aid];
+                auto it = env->task_pool.find(assigned_task_id);
+                if (it != env->task_pool.end())
+                {
+                    const auto& task = it->second;
+                    std::ostringstream oss;
+                    oss << "task_id=" << task.task_id
+                        << ", t_revealed=" << task.t_revealed
+                        << ", t_completed=" << task.t_completed
+                        << ", agent_assigned=" << task.agent_assigned
+                        << ", idx_next_loc=" << task.idx_next_loc
+                        << ", locations=[";
+                    for (size_t i = 0; i < task.locations.size(); ++i)
+                    {
+                        oss << task.locations[i];
+                        if (i + 1 < task.locations.size()) oss << ",";
+                    }
+                    oss << "]";
+                    const bool task_finished = (task.idx_next_loc >= static_cast<int>(task.locations.size()));
+                    if (!task_finished)
+                    {
+                        oss << ", next_loc=" << task.locations[task.idx_next_loc];
+                    }
+                    task_details = oss.str();
+                }
+            }
+            std::cout << "  agent " << aid
+                      << ": loc=" << curr_loc
+                      << ", goal=" << goal_loc
+                      << ", assigned_task_id=" << assigned_task_id
+                      << ", task_details=[" << task_details << "]:";;
+            for (int step = 0; step < static_cast<int>(actions[aid].size()); step++)
+            {
+                std::cout << (step == 0 ? " " : ", ") << debug_action_to_string(actions[aid][step]);
+            }
+            std::cout << std::endl;
+        }
+
+        // ----------------------------------------
+        // 恢复原始状?
+        // 注意：规划过程中进行了内部仿真（rollout），这里要恢复环境状?
+        // 真正的状态更新会?Executor 处理 plan 时发?
+        // ----------------------------------------
+        env->curr_states = original_states;
         env->curr_timestep = original_timestep;
         decided = original_decided;
     }
