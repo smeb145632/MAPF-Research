@@ -1,4 +1,3 @@
-
 #ifndef CONST_H
 #define CONST_H
 namespace DefaultPlanner
@@ -21,7 +20,17 @@ namespace DefaultPlanner
     // The TaskScheduler will deduct this value from the time limit for default scheduler.
     const int SCHEDULER_TIMELIMIT_TOLERANCE = 10;
 
-
+    // ============================================================
+    // Dynamic staged actions cache configuration
+    // When task density is high (busy_agents/total_agents > high_density_threshold),
+    // reduce planning steps to save memory. When low, increase for better efficiency.
+    // ============================================================
+    const bool ENABLE_DYNAMIC_STAGED_CACHE = true;
+    const double HIGH_DENSITY_THRESHOLD = 0.7;  // If >70% agents have tasks, reduce cache
+    const double LOW_DENSITY_THRESHOLD = 0.3;   // If <30% agents have tasks, increase cache
+    const int MIN_DYNAMIC_STEPS = 10;           // Minimum planning steps
+    const int MAX_DYNAMIC_STEPS = 50;           // Maximum planning steps
+    const double DENSITY_FACTOR = 30;           // Steps adjustment factor based on density
 
 }
 #endif

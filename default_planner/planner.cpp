@@ -523,6 +523,45 @@ namespace DefaultPlanner{
         }
 
         // ----------------------------------------
+        // 动态调整规划步数（根据任务密度）
+        // 高密度 → 减少步数节省内存
+        // 低密度 → 增加步数提升效率
+        // ----------------------------------------
+        if (ENABLE_DYNAMIC_STAGED_CACHE)
+        {
+            int busy_agents = 0;
+            for (int i = 0; i < env->num_of_agents; i++)
+            {
+                if (!env->goal_locations[i].empty())
+                {
+                    busy_agents++;
+                }
+            }
+            double density = (double)busy_agents / env->num_of_agents;
+            
+            int adjusted_steps = num_steps;
+            if (density > HIGH_DENSITY_THRESHOLD)
+            {
+                // 高密度：减少步数
+                adjusted_steps = MIN_DYNAMIC_STEPS + (int)(DENSITY_FACTOR * (1.0 - density));
+                if (adjusted_steps < MIN_DYNAMIC_STEPS) adjusted_steps = MIN_DYNAMIC_STEPS;
+            }
+            else if (density < LOW_DENSITY_THRESHOLD)
+            {
+                // 低密度：增加步数
+                adjusted_steps = MAX_DYNAMIC_STEPS - (int)(DENSITY_FACTOR * density);
+                if (adjusted_steps > MAX_DYNAMIC_STEPS) adjusted_steps = MAX_DYNAMIC_STEPS;
+            }
+            
+            if (adjusted_steps != num_steps)
+            {
+                std::cout << "[DefaultPlanner::plan] dynamic steps: num_steps " << num_steps 
+                          << " -> " << adjusted_steps << " (density=" << density << ")" << std::endl;
+                num_steps = adjusted_steps;
+            }
+        }
+
+        // ----------------------------------------
         // 计算时间预算
         // ----------------------------------------
         const auto episode_start = std::chrono::steady_clock::now();
