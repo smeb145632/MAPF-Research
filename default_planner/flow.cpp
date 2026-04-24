@@ -1,6 +1,7 @@
 
 
 #include "flow.h"
+#include "const.h"
 
 
 #include <random>
@@ -93,30 +94,23 @@ void update_fw_metrics(TrajLNS& lns){
 
 void frank_wolfe(TrajLNS& lns,std::unordered_set<int>& updated, TimePoint timelimit){
     update_fw_metrics(lns);
-    std::vector<FW_Metric> replan_order = lns.fw_metrics;
-    assert(replan_order.size() == lns.env->num_of_agents);
-
-    std::sort(replan_order.begin(), replan_order.end(),
-    [](FW_Metric& a, FW_Metric& b)
-    {
-        if (a.deviation > b.deviation)
-            return true;
-        else if ( a.deviation < b.deviation)
-            return false;
-        
-        if (a.last_replan_t < b.last_replan_t)
-            return true;
-        else if (a.last_replan_t > b.last_replan_t)
-            return false;
-
-        return a.rand > b.rand;
-    });
-
-    int count=0;
+    
+    // Get agents sorted by deviation (descending), stored in deviation_agents
+    get_deviation(lns);
+    
+    // Determine effective K: use FW_TOP_K_AGENTS if positive, otherwise use all deviation agents
+    int effective_k = FW_TOP_K_AGENTS > 0 ? std::min(FW_TOP_K_AGENTS, (int)lns.deviation_agents.size()) : lns.deviation_agents.size();
+    
+    if (effective_k == 0) {
+        return; // No agents to optimize
+    }
+    
+    int count = 0;
     int a, index;
     while (std::chrono::steady_clock::now() < timelimit){
-        index = count%lns.env->num_of_agents;
-        a = replan_order[index].id;
+        // Cycle through top-K deviation agents
+        index = count % effective_k;
+        a = lns.deviation_agents[index].second;
         count++;
         if (lns.traj_dists[a].empty() || lns.trajs[a].empty()){
             continue;

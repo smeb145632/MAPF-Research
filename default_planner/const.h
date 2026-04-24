@@ -1,4 +1,3 @@
-
 #ifndef CONST_H
 #define CONST_H
 namespace DefaultPlanner
@@ -21,7 +20,9 @@ namespace DefaultPlanner
     // The TaskScheduler will deduct this value from the time limit for default scheduler.
     const int SCHEDULER_TIMELIMIT_TOLERANCE = 10;
 
-
+    // Frank-Wolfe optimization: number of top-deviation agents to optimize per iteration
+    // Set to 0 or negative to disable top-K filtering (use all deviation agents)
+    const int FW_TOP_K_AGENTS = 10;
 
 }
 #endif
