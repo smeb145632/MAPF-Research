@@ -284,12 +284,155 @@ void init_dist_table(TrajLNS& lns, int amount){
 }
 
 //update traj and distance table for agent i
-void update_traj(TrajLNS& lns, int i){
+bool update_traj(TrajLNS& lns, int i, const TimePoint* deadline){
     int start = lns.env->curr_states[i].location;
     int goal = lns.tasks[i];
     lns.goal_nodes[i] = astar(lns.env,lns.flow, lns.heuristics[goal],lns.trajs[i],lns.mem,start,goal, &(lns.neighbors));
+    if (lns.goal_nodes[i].id == -1){
+        return false;
+    }
     add_traj(lns,i);
     update_dist_2_path(lns,i);
+    return true;
+}
+
+// ============================================================
+// M02: LNS-style Local Replanning
+// When global planning fails for an agent, use LNS-style neighborhood
+// selection and local replanning to resolve conflicts
+// ============================================================
+
+// Select neighborhood of agents near the given location
+// Returns agent IDs within a certain distance threshold
+static std::vector<int> select_neighborhood(TrajLNS& lns, int agent_id, int location, int distance_threshold) {
+    std::vector<int> neighborhood;
+    neighborhood.push_back(agent_id);  // Always include the failed agent
+    
+    // Find agents whose trajectories pass near the failed agent's location
+    for (int i = 0; i < lns.env->num_of_agents; i++) {
+        if (i == agent_id) continue;
+        if (lns.trajs[i].empty()) continue;
+        
+        // Check if any point in agent i's trajectory is within distance_threshold of location
+        for (int loc : lns.trajs[i]) {
+            int dist = std::abs(loc - location);
+            // Simple distance approximation (not true graph distance)
+            if (dist <= distance_threshold) {
+                neighborhood.push_back(i);
+                break;  // Only need one close point
+            }
+        }
+    }
+    
+    return neighborhood;
+}
+
+// Remove multiple trajectories from flow
+static void remove_neighborhood(TrajLNS& lns, const std::vector<int>& agents) {
+    for (int agent_id : agents) {
+        if (!lns.trajs[agent_id].empty()) {
+            remove_traj(lns, agent_id);
+        }
+    }
+}
+
+// Replan paths for neighborhood agents
+static int replan_neighborhood(TrajLNS& lns, const std::vector<int>& agents, int max_attempts) {
+    int success_count = 0;
+    
+    for (int attempt = 0; attempt < max_attempts; attempt++) {
+        bool all_success = true;
+        
+        for (int agent_id : agents) {
+            // Check timeout
+            if (!lns.trajs[agent_id].empty()) {
+                continue;  // Already has a valid trajectory
+            }
+            
+            int start = lns.env->curr_states[agent_id].location;
+            int goal = lns.tasks[agent_id];
+            
+            // Try to find a path considering the current flow (with some agents removed)
+            s_node goal_node = astar(lns.env, lns.flow, lns.heuristics[goal], 
+                                   lns.trajs[agent_id], lns.mem, start, goal, &(lns.neighbors));
+            
+            if (goal_node.id == -1) {
+                all_success = false;
+                break;  // Still can't find path, try different neighborhood
+            }
+            
+            lns.goal_nodes[agent_id] = goal_node;
+            add_traj(lns, agent_id);
+            update_dist_2_path(lns, agent_id);
+            success_count++;
+        }
+        
+        if (all_success) {
+            return success_count;
+        }
+    }
+    
+    return success_count;
+}
+
+// LNS-style local replanning fallback
+// Called when update_traj fails (astar returns -1)
+// Returns true if local replanning succeeded
+bool lns_local_replan(TrajLNS& lns, int failed_agent) {
+    #ifdef LNS_DEBUG_LOG
+    std::cout << "[LNS] Starting local replan for agent " << failed_agent 
+              << " at location " << lns.env->curr_states[failed_agent].location << std::endl;
+    #endif
+    
+    // Step 1: Select neighborhood (agents near the failed agent)
+    int failed_loc = lns.env->curr_states[failed_agent].location;
+    std::vector<int> neighborhood = select_neighborhood(lns, failed_agent, failed_loc, LNS_NEIGHBORHOOD_DISTANCE);
+    
+    #ifdef LNS_DEBUG_LOG
+    std::cout << "[LNS] Selected neighborhood size: " << neighborhood.size() << std::endl;
+    #endif
+    
+    if (neighborhood.size() <= 1) {
+        // No nearby agents, can't do local replanning
+        #ifdef LNS_DEBUG_LOG
+        std::cout << "[LNS] No nearby agents, giving up" << std::endl;
+        #endif
+        return false;
+    }
+    
+    // Step 2: Save original trajectories
+    std::vector<std::vector<int>> original_trajs(neighborhood.size());
+    for (size_t i = 0; i < neighborhood.size(); i++) {
+        original_trajs[i] = lns.trajs[neighborhood[i]];
+    }
+    
+    // Step 3: Remove neighborhood trajectories from flow
+    remove_neighborhood(lns, neighborhood);
+    
+    // Step 4: Try to replan for neighborhood
+    int max_attempts = LNS_MAX_REPLAN_ATTEMPTS;
+    int success_count = replan_neighborhood(lns, neighborhood, max_attempts);
+    
+    #ifdef LNS_DEBUG_LOG
+    std::cout << "[LNS] Replanned " << success_count << " out of " << neighborhood.size() << " agents" << std::endl;
+    #endif
+    
+    // Step 5: If unsuccessful, restore original trajectories
+    if (success_count < (int)neighborhood.size() - 1) {  // Allow 1 failure (the original failed agent)
+        // Restore original trajectories
+        for (size_t i = 0; i < neighborhood.size(); i++) {
+            if (lns.trajs[neighborhood[i]].empty() && !original_trajs[i].empty()) {
+                lns.trajs[neighborhood[i]] = original_trajs[i];
+                add_traj(lns, neighborhood[i]);
+            }
+        }
+        #ifdef LNS_DEBUG_LOG
+        std::cout << "[LNS] Restored original trajectories" << std::endl;
+        #endif
+        return false;
+    }
+    
+    return true;
 }
 
 }

@@ -55,7 +55,31 @@ namespace DefaultPlanner
     const bool FW_USE_MOMENTUM = true;             // Enable momentum-based iteration adjustment
     const double FW_MOMENTUM_FACTOR = 0.7;         // Reduce iterations to 70% when diverging
 
-    // Debug logging (enable with -DFW_DEBUG_LOG compiler flag)
+        // Debug logging (enable with -DFW_DEBUG_LOG compiler flag)
+    // #define FW_DEBUG_LOG 1  // Uncomment to enable debug output
+
+    // ============================================================
+    // M02: LNS-style Local Replanning
+    // When global planning fails for an agent, use LNS-style neighborhood
+    // selection and local replanning to resolve conflicts
+    // ============================================================
+
+    // Neighborhood selection distance threshold
+    // Agents within this distance (in grid cells) of the failed agent are considered neighbors
+    const int LNS_NEIGHBORHOOD_DISTANCE = 5;
+
+    // Maximum replanning attempts for local replanning
+    const int LNS_MAX_REPLAN_ATTEMPTS = 3;
+
+    // Minimum neighborhood size to attempt local replanning
+    // If fewer agents are nearby, skip local replanning
+    const int LNS_MIN_NEIGHBORHOOD_SIZE = 2;
+
+    // Debug logging for LNS (enable with -DLNS_DEBUG_LOG compiler flag)
+    // #define LNS_DEBUG_LOG 1  // Uncomment to enable debug output
+
+}
+#endif flag)
     // #define FW_DEBUG_LOG 1  // Uncomment to enable debug output
 
 }
