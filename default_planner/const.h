@@ -25,6 +25,21 @@ namespace DefaultPlanner
     const int FW_TOP_K_AGENTS = 10;
 
     // ============================================================
+    // Adaptive PIBT parameters (H03)
+    // Based on scene density and time budget to dynamically adjust PIBT time allocation
+    // ============================================================
+    
+    // Density-based adjustment: when density is high, more conflicts occur,
+    // so we allocate less time per agent (more frequent but shorter planning)
+    const double PIBT_DENSITY_HIGH_THRESHOLD = 0.7;  // High density threshold
+    const double PIBT_DENSITY_LOW_THRESHOLD = 0.3;   // Low density threshold
+    const double PIBT_DENSITY_FACTOR = 0.5;          // Time adjustment factor based on density
+    
+    // Time budget-based adjustment: when time is tight, reduce PIBT time to ensure flow optimization
+    const double PIBT_TIME_BUDGET_THRESHOLD = 0.5;  // Ratio of time limit to consider "tight"
+    const double PIBT_TIME_BUDGET_FACTOR = 0.7;     // Multiplier when time is tight
+
+    // ============================================================
     // Dynamic staged actions cache configuration
     // When task density is high (busy_agents/total_agents > high_density_threshold),
     // reduce planning steps to save memory. When low, increase for better efficiency.
