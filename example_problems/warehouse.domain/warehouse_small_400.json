@@ -4,5 +4,15 @@
     "teamSize": 400,
     "taskFile": "tasks/warehouse_small.tasks",
     "numTasksReveal": 1,
-    "taskAssignmentStrategy": "roundrobin"
+    "taskAssignmentStrategy": "roundrobin",
+    "delayConfig": {
+        "seed": 0,
+        "minDelay": 2,
+        "maxDelay": 8,
+        "eventModel": "poisson",
+        "pDelay": 0.003,
+        "durationModel": "gaussian",
+        "gaussMeanRatio": 0.5,
+        "gaussStdRatio": 0.22
+    }
 }
