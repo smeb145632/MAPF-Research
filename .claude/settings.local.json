@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"C:/Users/xyh/.claude/skills/steve-jobs-perspective/references/research\")",
+      "Bash(mkdir -p \"C:/Users/xyh/.claude/skills/steve-jobs-perspective/references/sources\")",
+      "WebSearch",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:news.stanford.edu)",
+      "Bash(mkdir -p \"C:/Users/xyh/.claude/skills/luo-yonghao-perspective/references/research\")",
+      "Bash(mkdir -p \"C:/Users/xyh/.claude/skills/luo-yonghao-perspective/references/sources\")"
+    ],
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "additionalDirectories": [
+    "C:\\Users\\xyh\\.claude"
+  ]
+}

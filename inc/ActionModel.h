@@ -15,6 +15,14 @@ enum Action {FW, CR, CCR, W, NA};
 
 std::ostream& operator<<(std::ostream &stream, const Action &action);
 
+// L04: Delay tolerance configuration
+// Controls how much execution deviation the system tolerates
+struct DelayToleranceConfig {
+    int delay_tolerance_timesteps = 2;  // Max timesteps an agent can be delayed
+    bool enable_vertex_tolerance = true;  // Allow vertex conflicts to resolve within tolerance
+    bool enable_edge_tolerance = true;  // Allow edge conflicts to resolve within tolerance
+};
+
 class ActionModelWithRotate
 {
 public:
@@ -27,6 +35,15 @@ public:
         moves[3] = -cols;
 
     };
+
+    // L04: Set delay tolerance configuration
+    void set_delay_tolerance(const DelayToleranceConfig& config) {
+        delay_config = config;
+    }
+    
+    const DelayToleranceConfig& get_delay_tolerance() const {
+        return delay_config;
+    }
 
     bool is_valid(const vector<State>& prev, const vector<Action> & action);
     void set_logger(Logger* logger){this->logger = logger;}
@@ -46,6 +63,7 @@ protected:
     int cols;
     int moves[4];
     Logger* logger = nullptr;
+    DelayToleranceConfig delay_config;  // L04: Delay tolerance settings
 
     State result_state(const State & prev, Action action)
     {
@@ -69,4 +87,9 @@ protected:
 
         return State(new_location, prev.timestep + 1, new_orientation);
     }
+    
+    // L04: Check if a conflict is tolerable under delay tolerance rules
+    bool is_conflict_tolerable(int agent_id, int other_agent_id, int timestep, 
+                              const string& conflict_type, 
+                              const vector<State>& prev, const vector<State>& next);
 };

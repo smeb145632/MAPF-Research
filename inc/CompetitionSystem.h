@@ -35,7 +35,14 @@ public:
     void set_num_tasks_reveal(int num){num_tasks_reveal = num;};
     void set_plan_time_limit(int limit){plan_time_limit = limit;};
     void set_preprocess_time_limit(int limit){preprocess_time_limit = limit;};
-    void set_logger(Logger* logger){this->logger = logger;}
+    void set_logger(Logger* logger){this->logger = logger;};
+    
+    // L04: Configure delay tolerance for execution robustness
+    void set_delay_tolerance(const DelayToleranceConfig& config) {
+        if (model) {
+            model->set_delay_tolerance(config);
+        }
+    }
 
 	void simulate(int simulation_time);
     vector<Action> plan();
