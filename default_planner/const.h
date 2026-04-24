@@ -87,6 +87,14 @@ namespace DefaultPlanner
     // If fewer agents are nearby, skip local replanning
     const int LNS_MIN_NEIGHBORHOOD_SIZE = 2;
 
+    // ============================================================
+    // SIPPS (Safe Interval Path Planning with Soft constraints) configuration
+    // Used when replanning paths with soft obstacles (other agents' paths)
+    // ============================================================
+    const bool USE_SIPPS = false;              // Enable SIPPS instead of A* for replanning
+    const int SOFT_OBSTACLE_FLOW_THRESHOLD = 2; // Flow > this value indicates soft obstacle
+    const int SIPPS_TIME_LIMIT_MS = 100;        // Max time for SIPPS search
+
     // Debug logging for LNS (enable with -DLNS_DEBUG_LOG compiler flag)
     // #define LNS_DEBUG_LOG 1  // Uncomment to enable debug output
 
