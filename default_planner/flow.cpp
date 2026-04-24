@@ -2,6 +2,7 @@
 
 #include "flow.h"
 #include "const.h"
+#include "sipps.h"
 
 
 #include <random>
@@ -154,7 +155,13 @@ void init_dist_table(TrajLNS& lns, int amount){
 void update_traj(TrajLNS& lns, int i){
     int start = lns.env->curr_states[i].location;
     int goal = lns.tasks[i];
-    lns.goal_nodes[i] = astar(lns.env,lns.flow, lns.heuristics[goal],lns.trajs[i],lns.mem,start,goal, &(lns.neighbors));
+    if (USE_SIPPS) {
+        // Use SIPPS for path planning with soft constraints
+        int soft_collisions = sipps(lns.env, lns.flow, lns.heuristics[goal], lns.trajs[i], start, goal, &(lns.neighbors), MAX_TIMESTEP);
+    } else {
+        // Use standard A*
+        lns.goal_nodes[i] = astar(lns.env,lns.flow, lns.heuristics[goal],lns.trajs[i],lns.mem,start,goal, &(lns.neighbors));
+    }
     add_traj(lns,i);
     update_dist_2_path(lns,i);
 }

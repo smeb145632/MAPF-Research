@@ -36,5 +36,13 @@ namespace DefaultPlanner
     const int MAX_DYNAMIC_STEPS = 50;           // Maximum planning steps
     const double DENSITY_FACTOR = 30;           // Steps adjustment factor based on density
 
+    // ============================================================
+    // SIPPS (Safe Interval Path Planning with Soft constraints) configuration
+    // Used when replanning paths with soft obstacles (other agents' paths)
+    // ============================================================
+    const bool USE_SIPPS = false;              // Enable SIPPS instead of A* for replanning
+    const int SOFT_OBSTACLE_FLOW_THRESHOLD = 2; // Flow > this value indicates soft obstacle
+    const int SIPPS_TIME_LIMIT_MS = 100;        // Max time for SIPPS search
+
 }
 #endif
