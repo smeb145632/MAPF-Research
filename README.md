@@ -1,16 +1,9 @@
-# Disclaimer:
-
-This repository contains my personal submissions and attempted solutions for the League of Robot Runners competition. It is not officially affiliated with the competition organizers, nor does it represent the entirety of solutions submitted by all participants. This is solely my interpretation and implementation of the competition's challenges.
-
-![Simulation Example](/image/warehouse-demo.gif)
-
-
 # Start-Kit
 
 ## Join the competition
 
 Log in to the [competition website](http://www.leagueofrobotrunners.org/) with a GitHub account, and we will automatically create a private GitHub submission repo for you.
-The repo will be the place where you submit codes. In the `My Submission` page, you can click "My Repo" to open your GitHub submission repo page.
+The repo will be the place where you submit code. In the `My Submission` page, you can click "My Repo" to open your GitHub submission repo page.
 
 ## Clone your submission repo
 
@@ -27,12 +20,13 @@ $ cd your_submission_repo
 
 - [cmake >= 3.16](https://cmake.org/)
 - [libboost >= 1.49.0](https://www.boost.org/)
-- Python3 and [pybind11](https://pybind11.readthedocs.io/en/stable/) (for python interface user)
+- [Python3 >= 3.11](https://www.python.org/)
+- [pybind11 >= 3.0.1](https://pybind11.readthedocs.io/en/stable/)
 
 Install dependencies on Ubuntu or Debian Linux:
 ```shell
 sudo apt-get update
-sudo apt-get install build-essential libboost-all-dev python3-dev python3-pybind11 
+sudo apt-get install build-essential libboost-all-dev python3-dev python3-pybind11
 ```
 
 [Homebrew](https://brew.sh/) is recomanded for installing dependencies on Mac OS.
@@ -60,7 +54,7 @@ Running the start-kit using commands:
 
 for example:
 ```shell
-./build/lifelong --inputFile ./example_problems/random.domain/random_20.json -o test.json
+./build/lifelong --inputFile ./example_problems/random.domain/random_32_32_20_100.json -o test.json
 ```
 
 more info on help:
@@ -74,25 +68,59 @@ If you are a Windows user, the most straightforward method to utilize our start-
 2. Open a shell in WSL and execute the following commands to install the necessary tools (CMake, GCC, Boost, pip, Pybind11):
 ```shell
 sudo apt-get update
-sudo apt-get install cmake g++ libboost-all-dev python3-pip python3-pybind11 
+sudo apt-get install cmake g++ libboost-all-dev python3-dev python3-pip
+pip install pybind11-global numpy
 ```
 3. Employ the commands provided above to compile the start-kit.
 
 While it's technically possible to use our start-kit with Cygwin, Mingw, and MSVC, doing so would be more complex compared to using WSL. You would likely need to configure the environment yourself.
 
+If you are a docker user, another choice is to develop and test your python implementation under a docker environment. You can the re-create the evaluation environment locally on your machine. For more details, check out the [Test in Docker](./Prepare_Your_Submission.md#test-in-docker) section.
+
 ## Upgrade Your Start-Kit
 
-If your private start-kit copy repo was created before a start-kit upgrade, you could run the `./upgrade_start_kit.sh` to upgrade your start-kit to the latest version.
+If your private start-kit copy repo was created before a start-kit upgrade, always fetch and run the **latest** upgrade script from the official Start-Kit repository (instead of relying on your local copy, which may be outdated).
+
+Run these commands from the root of your private submission repo:
+
+```shell
+curl -fsSL -o ./upgrade_start_kit.sh https://raw.githubusercontent.com/MAPF-Competition/Start-Kit/main/upgrade_start_kit.sh
+bash ./upgrade_start_kit.sh
+```
+
+Alternative (wget):
+
+```shell
+wget -qO ./upgrade_start_kit.sh https://raw.githubusercontent.com/MAPF-Competition/Start-Kit/main/upgrade_start_kit.sh
+bash ./upgrade_start_kit.sh
+```
+
+By default, this runs in **dry-run** mode and prints the upgrade plan only.
+
+Apply the upgrade:
+
+```shell
+bash ./upgrade_start_kit.sh --apply
+```
+
+Useful options:
+- `--to-version 3.1.0` to target a specific Start-Kit release (default: latest release).
+- `--allow-dirty` to apply on a non-clean git tree (not recommended).
+- `--source-branch dev` to test upgrades from an upstream branch (for example unpublished changes on `dev`).
+
+Example for testing branch updates:
+
+```shell
+bash ./upgrade_start_kit.sh --source-branch dev --apply
+```
 
 You can check `version.txt` to know the current version of your start-kit.
 
-The `upgrade_start_kit.sh` will check which file is marked as an upgrade needed and pull those files from the start-kit. It will pull and stage the files, but not commit them. This allows you to review the changes before committing them. 
+The upgrader is manifest-driven and release-by-release. It restores managed/protected files from official Start-Kit release tags, stages those updates, and does not commit automatically.
 
-For files stated as unmodifiable in [Parepare_Your_Planner.md](./Prepare_Your_Planner.md), you always commit their changes.
+For participant-modifiable files that changed between your local version and the target release, the upgrader performs a 3-way merge (local/base/remote). If conflicts exist, they are left as standard git conflict markers for manual resolution.
 
-The upgrade may overwrite some of your changes to `CMakeLists.txt`, `compile.sh`, and `apt.txt`, you could compare the difference using `git diff` and decide whether to revert some modifications or partially accept changes on these files.
-
-The upgrade script will not touch any participants' created file, `python/pyMAPFPlanner.py`, `inc/MAPFPlanner.h` and `src/MAPFPlanner.cpp`. So that participants' implementations should not be influenced by the start-kit upgrade.
+The upgrade script will not touch most participant implementation files.
 
 ## Input output description
 
@@ -100,7 +128,7 @@ Please refer to the [Input_Output_Format.md](./Input_Output_Format.md).
 
 ## Prepare Your Planner
 
-Please refer to the [Prepare_Your_Planner.md](./Prepare_Your_Planner.md).
+Please refer to the [Prepare_Your_Submission.md](./Prepare_Your_Submission.md).
 
 ## Debug and Visualise Your Planner
 We provide a visualisation tool written in Python: [https://github.com/MAPF-Competition/PlanViz](https://github.com/MAPF-Competition/PlanViz).

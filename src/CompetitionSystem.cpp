@@ -1,119 +1,100 @@
 #include <cmath>
 #include "CompetitionSystem.h"
 #include <boost/tokenizer.hpp>
+#include "SharedEnv.h"
 #include "nlohmann/json.hpp"
 #include <functional>
 #include <Logger.h>
+#include <fstream>
 
 using json = nlohmann::ordered_json;
 
-
-list<Task> BaseSystem::move(vector<Action>& actions)
+void BaseSystem::set_task_trend_output(const std::string& file_name, int interval)
 {
-    // actions.resize(num_of_agents, Action::NA);
-    for (int k = 0; k < num_of_agents; k++)
+    task_trend_output_file = file_name;
+    task_trend_interval = interval;
+}
+
+void BaseSystem::write_task_trend_snapshot(int timestep, bool force)
+{
+    if (task_trend_output_file.empty())
     {
-        //log->log_plan(false,k);
-        if (k >= actions.size()){
-            fast_mover_feasible = false;
-            planner_movements[k].push_back(Action::NA);
-        }
-        else
+        return;
+    }
+
+    if (!force)
+    {
+        if (task_trend_interval <= 0 || timestep <= 0 || timestep % task_trend_interval != 0)
         {
-            planner_movements[k].push_back(actions[k]);
+            return;
         }
     }
 
-    list<Task> finished_tasks_this_timestep; // <agent_id, task_id, timestep>
-    if (!valid_moves(curr_states, actions))
+    if (timestep == last_task_trend_timestep)
     {
-        fast_mover_feasible = false;
-        actions = std::vector<Action>(num_of_agents, Action::W);
+        return;
     }
 
-    curr_states = model->result_states(curr_states, actions);
-    // agents do not move
-    for (int k = 0; k < num_of_agents; k++)
+    std::ofstream out(task_trend_output_file, std::ios::app);
+    if (!out.is_open())
     {
-        if (!assigned_tasks[k].empty() && curr_states[k].location == assigned_tasks[k].front().location)
+        if (logger != nullptr)
         {
-            Task task = assigned_tasks[k].front();
-            assigned_tasks[k].pop_front();
-            task.t_completed = timestep;
-            finished_tasks_this_timestep.push_back(task);
-            events[k].push_back(make_tuple(task.task_id, timestep,"finished"));
-            // log_event_finished(k, task.task_id, timestep);
+            logger->log_warning("Failed to open task trend output file: " + task_trend_output_file, timestep);
         }
-        paths[k].push_back(curr_states[k]);
-        actual_movements[k].push_back(actions[k]);
+        return;
     }
 
-    return finished_tasks_this_timestep;
+    const int cumulative_finished = task_manager.num_of_task_finish;
+    const int interval_finished = cumulative_finished - last_task_trend_finished;
+    out << timestep << " " << cumulative_finished << " " << interval_finished << "\n";
+
+    last_task_trend_timestep = timestep;
+    last_task_trend_finished = cumulative_finished;
 }
 
-
-// This function might not work correctly with small map (w or h <=2)
-bool BaseSystem::valid_moves(vector<State>& prev, vector<Action>& action)
+void BaseSystem::sync_shared_env_planner() 
 {
-    return model->is_valid(prev, action);
+    env->goal_locations.resize(num_of_agents);
+    task_manager.sync_shared_env(env);
+    simulator.sync_shared_env(env);
 }
 
-
-void BaseSystem::sync_shared_env() {
-
-    if (!started){
-        env->goal_locations.resize(num_of_agents);
-        for (size_t i = 0; i < num_of_agents; i++)
-        {
-            env->goal_locations[i].clear();
-            for (auto& task: assigned_tasks[i])
-            {
-                env->goal_locations[i].push_back({task.location, task.t_assigned });
-            }
-        }
-        env->curr_states = curr_states;
-    }
-    env->curr_timestep = timestep;
-}
-
-
-vector<Action> BaseSystem::plan_wrapper()
+void BaseSystem::sync_shared_env_executor() 
 {
-    vector<Action> actions;
-    planner->plan(plan_time_limit, actions);
-    return actions;
+    simulator.sync_shared_env(exec_env);
 }
 
 
-vector<Action> BaseSystem::plan()
+bool BaseSystem::planner_wrapper()
 {
-    // 同步调用，避免 Python 3.12 GIL 问题
-    try
-    {
-        vector<Action> actions;
-        planner->plan(plan_time_limit, actions);
-        return actions;
-    }
-    catch (...)
-    {
-        logger->log_info("planner error", timestep);
-        return {};
-    }
+    planner->compute(min_comm_time, proposed_plan, proposed_schedule);
+    return true;
+}
+
+bool BaseSystem::planner_wrapper_init()
+{
+    planner->compute(initial_plan_time_limit, proposed_plan, proposed_schedule);
+    return true;
 }
 
 
 bool BaseSystem::planner_initialize()
 {
-    // 同步调用，不开子线程，避免 Python 3.12 GIL 问题
-    try
+    using namespace std::placeholders;
+    std::packaged_task<void(int)> init_task(std::bind(&Entry::initialize, planner, _1));
+    auto init_future = init_task.get_future();
+    
+    env->plan_start_time = std::chrono::steady_clock::now();
+    auto init_td = std::thread(std::move(init_task), preprocess_time_limit);
+    if (init_future.wait_for(std::chrono::milliseconds(preprocess_time_limit)) == std::future_status::ready)
     {
-        planner->initialize(preprocess_time_limit);
+        init_td.join();
         return true;
     }
-    catch (...)
-    {
-        return false;
-    }
+
+    init_td.detach();
+    return false;
 }
 
 
@@ -123,324 +104,296 @@ void BaseSystem::log_preprocessing(bool succ)
         return;
     if (succ)
     {
-        logger->log_info("Preprocessing success", timestep);
+        logger->log_info("Preprocessing success", simulator.get_curr_timestep());
     } 
     else
     {
-        logger->log_fatal("Preprocessing timeout", timestep);
+        logger->log_fatal("Preprocessing timeout", simulator.get_curr_timestep());
     }
     logger->flush();
 }
 
 
-void BaseSystem::log_event_assigned(int agent_id, int task_id, int timestep)
+void BaseSystem::simulate(int simulation_time, int chunk_size)
 {
-    logger->log_info("Task " + std::to_string(task_id) + " is assigned to agent " + std::to_string(agent_id), timestep);
-}
-
-
-void BaseSystem::log_event_finished(int agent_id, int task_id, int timestep) 
-{
-    logger->log_info("Agent " + std::to_string(agent_id) + " finishes task " + std::to_string(task_id), timestep);
-}
-
-
-void BaseSystem::simulate(int simulation_time)
-{
-    //init logger
-    //Logger* log = new Logger();
+    simulator.set_chunk(chunk_size, simulation_time);
     initialize();
-    int num_of_tasks = 0;
 
-    for (; timestep < simulation_time; )
+    this->simulation_time = simulation_time;
+
+    vector<State> curr_states = simulator.get_current_state();
+
+    //start initial planning
+    plan_time_limit = initial_plan_time_limit;
+    std::packaged_task<bool()> task(std::bind(&BaseSystem::planner_wrapper_init, this));
+    future = task.get_future();
+    env->plan_start_time = std::chrono::steady_clock::now();
+    task_td = std::thread(std::move(task));
+    started = true;
+    task_manager.clear_new_agents_tasks();
+
+    if (future.wait_for(std::chrono::milliseconds(initial_plan_time_limit)) == std::future_status::ready)
     {
-        // find a plan
-        sync_shared_env();
+        task_td.join();
+        started = false;
+        auto res = future.get();
+        logger->log_info("planner returns", simulator.get_curr_timestep());
+    }
+    else
+    {
+        logger->log_info("planner timeout", simulator.get_curr_timestep());
+    }
 
-        auto start = std::chrono::steady_clock::now();
-
-        vector<Action> actions = plan();
-
-        auto end = std::chrono::steady_clock::now();
-
-        timestep += 1;
-        for (int a = 0; a < num_of_agents; a++)
+    //initial planning timeout
+    while (started)
+    {
+        //wait for initial planning to finish and at the same time move all wait
+        logger->log_info("planner (initilal planning) cannot run because the previous run is still running", simulator.get_curr_timestep());
+        auto deadline   = std::chrono::steady_clock::now() + std::chrono::milliseconds(simulator_time_limit);
+        //main thread move drives by calling simulator.move
+        simulator.move_all_wait(1);
+        auto move_end = std::chrono::steady_clock::now();
+        while(deadline < move_end)
         {
-            if (!env->goal_locations[a].empty())
-                solution_costs[a]++;
+            //move takes more time than simulator_time_limit, extend deadline
+            deadline += std::chrono::milliseconds(simulator_time_limit);
         }
+        // wait until deadline OR planner finishes early
+        const auto st = future.wait_until(deadline);
 
-        // move drives
-        list<Task> new_finished_tasks = move(actions);
-        if (!planner_movements[0].empty() && planner_movements[0].back() == Action::NA)
+        if (st == std::future_status::ready) 
         {
-            planner_times.back()+=plan_time_limit;  //add planning time to last record
-        }
-        else
+            task_td.join();
+            started = false;
+            auto res = future.get();
+            logger->log_info("planner (initilal planning) returns", simulator.get_curr_timestep());
+        } 
+        else 
         {
-            auto diff = end-start;
-            planner_times.push_back(std::chrono::duration<double>(diff).count());
-        }
-
-        // update tasks
-        for (auto task : new_finished_tasks)
-        {
-            // int id, loc, t;
-            // std::tie(id, loc, t) = task;
-            finished_tasks[task.agent_assigned].emplace_back(task);
-            num_of_tasks++;
-            num_of_task_finish++;
-        }
-
-        update_tasks();
-
-        bool complete_all = false;
-        for (auto & t: assigned_tasks)
-        {
-            if(t.empty()) 
-            {
-                complete_all = true;
-            }
-            else
-            {
-                complete_all = false;
-                break;
-            }
-        }
-        if (complete_all)
-        {
-            break;
+            logger->log_info("planner (initilal planning) timeout", simulator.get_curr_timestep());
         }
     }
+
+    std::chrono::steady_clock::time_point plan_start = std::chrono::steady_clock::now();
+
+    int remain_communication_time = 0;
+
+    while (simulator.get_curr_timestep() < simulation_time)
+    {
+        //check if planenr finished
+        if (remain_communication_time <= 0 && started)
+        {
+            auto deadline = plan_start + std::chrono::milliseconds(min_comm_time - remain_communication_time);
+            const auto st = future.wait_until(deadline);
+            if (st == std::future_status::ready) 
+            {
+                task_td.join();
+                started = false;
+                auto res = future.get();
+                logger->log_info("planner returns", simulator.get_curr_timestep());
+            } 
+            else 
+            {
+                logger->log_info("planner timeout", simulator.get_curr_timestep());
+            }
+        }
+
+        //planner finished and min communication time reached, launch new planning
+        if (!started && remain_communication_time <= 0)
+        {
+            //apply proposed schedule to task_manager before syncing,
+            //so that env->curr_task_schedule reflects the latest accepted assignments.
+            task_manager.set_task_assignment(proposed_schedule,simulator.get_curr_timestep());
+
+            //process new plan in simulator
+            sync_shared_env_executor();
+            simulator.process_new_plan(process_new_plan_time_limit, simulator_time_limit, proposed_plan);
+
+            //launch new planning task
+            sync_shared_env_planner();
+            plan_time_limit = min_comm_time;
+            std::packaged_task<bool()> task(std::bind(&BaseSystem::planner_wrapper, this));
+            future = task.get_future();
+            env->plan_start_time = std::chrono::steady_clock::now();
+            task_td = std::thread(std::move(task));
+            started = true;
+            plan_start = std::chrono::steady_clock::now();
+            task_manager.clear_new_agents_tasks();
+            remain_communication_time = min_comm_time;
+        }
+
+        //while the planner is running, move from previous plans
+        sync_shared_env_executor();
+        auto move_start = std::chrono::steady_clock::now();
+        curr_states = simulator.move(simulator_time_limit);
+        auto move_end = std::chrono::steady_clock::now();
+
+        int elapsed_tick =std::max(1, ((int)std::chrono::duration_cast<std::chrono::milliseconds>(move_end - move_start).count() + simulator_time_limit - 1) / simulator_time_limit);
+        remain_communication_time -= elapsed_tick*simulator_time_limit;
+
+        //update tasks
+        task_manager.update_tasks(curr_states, proposed_schedule, simulator.get_curr_timestep());
+        write_task_trend_snapshot(simulator.get_curr_timestep());
+    }
+
+    write_task_trend_snapshot(simulator.get_curr_timestep(), true);
 }
 
 
 void BaseSystem::initialize()
 {
-    paths.resize(num_of_agents);
-    events.resize(num_of_agents);
+    last_task_trend_timestep = 0;
+    last_task_trend_finished = 0;
+
+    if (!task_trend_output_file.empty())
+    {
+        std::ofstream out(task_trend_output_file, std::ios::trunc);
+        if (!out.is_open())
+        {
+            if (logger != nullptr)
+            {
+                logger->log_warning("Failed to initialize task trend output file: " + task_trend_output_file);
+            }
+        }
+        else
+        {
+            out << "timestep cumulative_finished interval_finished\n";
+        }
+    }
+
     env->num_of_agents = num_of_agents;
     env->rows = map.rows;
     env->cols = map.cols;
     env->map = map.map;
-    finished_tasks.resize(num_of_agents);
-    // bool succ = load_records(); // continue simulating from the records
-    timestep = 0;
-    curr_states = starts;
-    assigned_tasks.resize(num_of_agents);
 
-    //planner initilise before knowing the first goals
-    bool planner_initialize_success= planner_initialize();
-    
-    log_preprocessing(planner_initialize_success);
-    if (!planner_initialize_success)
+    env->min_planner_communication_time = min_comm_time;
+    env->action_time = simulator_time_limit;
+    env->max_counter = simulator.get_max_counter();
+
+    exec_env->num_of_agents = num_of_agents;
+    exec_env->rows = map.rows;
+    exec_env->cols = map.cols;
+    exec_env->map = map.map;    
+
+    exec_env->min_planner_communication_time = min_comm_time;
+    exec_env->action_time = simulator_time_limit;
+    exec_env->max_counter = simulator.get_max_counter();
+
+    int timestep = simulator.get_curr_timestep();
+
+    std::packaged_task<void(int)> init_task(std::bind(&Entry::initialize, planner, std::placeholders::_1));
+    auto init_future = init_task.get_future();
+
+    auto init_start_time = std::chrono::steady_clock::now();
+    env->plan_start_time = init_start_time;
+    exec_env->plan_start_time = init_start_time;
+    auto init_deadline   = init_start_time + std::chrono::milliseconds(preprocess_time_limit);
+    std::thread init_td(std::move(init_task), preprocess_time_limit);
+
+    simulator.initialise_executor(preprocess_time_limit);
+
+    auto init_end_time = std::chrono::steady_clock::now();
+
+    int diff = (int)std::chrono::duration_cast<std::chrono::milliseconds>(init_end_time - init_start_time).count();
+
+    if (init_future.wait_until(init_deadline) == std::future_status::ready && diff <= preprocess_time_limit)
+    {
+        init_td.join();
+        log_preprocessing(true);
+    } 
+    else 
+    {
+        init_td.detach();
+        log_preprocessing(false);
         _exit(124);
+    }
 
     // initialize_goal_locations();
-    update_tasks();
+    task_manager.reveal_tasks(timestep); //this also intialize env->new_tasks
 
-    sync_shared_env();
+    sync_shared_env_planner(); // sync the new tasks and new_free_agents to the shared environment for the planner to use in the first planning
+    sync_shared_env_executor(); // sync the new tasks and new_free_agents to the shared environment for the executor to use in the first move
 
-    actual_movements.resize(num_of_agents);
-    planner_movements.resize(num_of_agents);
+    env->new_freeagents.reserve(num_of_agents); //new free agents are empty in task_manager on initialization, set it after task_manager sync
+    exec_env->new_freeagents.reserve(num_of_agents);
+    for (int i = 0; i < num_of_agents; i++)
+    {
+        env->new_freeagents.push_back(i);
+        exec_env->new_freeagents.push_back(i);
+    }
+
     solution_costs.resize(num_of_agents);
     for (int a = 0; a < num_of_agents; a++)
     {
         solution_costs[a] = 0;
     }
-}
 
-void BaseSystem::savePaths(const string &fileName, int option) const
-{
-    std::ofstream output;
-    output.open(fileName, std::ios::out);
-    for (int i = 0; i < num_of_agents; i++)
-    {
-        output << "Agent " << i << ": ";
-        if (option == 0)
-        {
-            bool first = true;
-            for (const auto t : actual_movements[i])
-            {
-                if (!first)
-                {
-                    output << ",";
-                }
-                else
-                {
-                    first = false;
-                }
-                output << t;
-            }
-        }
-        else if (option == 1)
-        {
-            bool first = true;
-            for (const auto t : planner_movements[i])
-            {
-                if (!first)
-                {
-                    output << ",";
-                } 
-                else 
-                {
-                    first = false;
-                }
-                output << t;
-            }
-        }
-        output << endl;
-    }
-    output.close();
+    // proposed_actions.resize(num_of_agents, Action::W);
+    proposed_schedule.resize(num_of_agents, -1);
 }
 
 
-void BaseSystem::saveResults(const string &fileName, int screen) const
+void BaseSystem::saveResults(const string &fileName, int screen, bool pretty_print) const
 {
     json js;
     // Save action model
     js["actionModel"] = "MAPF_T";
-
-    std::string feasible = fast_mover_feasible ? "Yes" : "No";
-    js["AllValid"] = feasible;
+    js["version"] = "2026 LoRR";
 
     js["teamSize"] = num_of_agents;
+
+    js["numTaskFinished"] = task_manager.num_of_task_finish;
+    
+    js["makespan"] = simulation_time;
+
+    js["numPlannerErrors"] = simulator.get_number_errors();
+    js["numScheduleErrors"] = task_manager.get_number_errors();
+
+    js["numEntryTimeouts"] = total_timetous;
+
+    js["agentMaxCounter"] = simulator.get_max_counter();
+    js["outputSegmentSize"]=simulator.get_chunk_size();
 
     // Save start locations[x,y,orientation]
     if (screen <= 2)
     {
-        json start = json::array();
-        for (int i = 0; i < num_of_agents; i++)
-        {
-            json s = json::array();
-            s.push_back(starts[i].location/map.cols);
-            s.push_back(starts[i].location%map.cols);
-            switch (starts[i].orientation)
-            {
-            case 0:
-                s.push_back("E");
-                break;
-            case 1:
-                s.push_back("S");
-            case 2:
-                s.push_back("W");
-                break;
-            case 3:
-                s.push_back("N");
-                break;
-            }
-            start.push_back(s);
-        }
-        js["start"] = start;
+        js["delayIntervals"] = simulator.delay_intervals_to_json();
+        js["start"] = simulator.starts_to_json();
     }
-
-    js["numTaskFinished"] = num_of_task_finish;
-    int sum_of_cost = 0;
-    int makespan = 0;
-    if (num_of_agents > 0)
-    {
-        sum_of_cost = solution_costs[0];
-        makespan = solution_costs[0];
-        for (int a = 1; a < num_of_agents; a++)
-        {
-            sum_of_cost += solution_costs[a];
-            if (solution_costs[a] > makespan)
-            {
-                makespan = solution_costs[a];
-            }
-        }
-    }
-    js["sumOfCost"] = sum_of_cost;
-    js["makespan"] = makespan;
     
     if (screen <= 2)
     {
-        // Save actual paths
-        json apaths = json::array();
-        for (int i = 0; i < num_of_agents; i++)
-        {
-            std::string path;
-            bool first = true;
-            for (const auto action : actual_movements[i])
-            {
-                if (!first)
-                {
-                    path+= ",";
-                }
-                else
-                {
-                    first = false;
-                }
+        js["actualPaths"] = simulator.actual_path_to_json();
+    }
 
-                if (action == Action::FW)
-                {
-                    path+="F";
-                }
-                else if (action == Action::CR)
-                {
-                    path+="R";
-                } 
-                else if (action == Action::CCR)
-                {
-                    path+="C";
-                }
-                else if (action == Action::NA)
-                {
-                    path+="T";
-                }
-                else
-                {
-                    path+="W";
-                }
-            }
-            apaths.push_back(path);
+    if (screen <= 2)
+    {
+        // Save events
+        json event = json::array();
+        for(auto e: task_manager.events)
+        {
+            json ev = json::array();
+            int timestep;
+            int agent_id;
+            int task_id;
+            int seq_id;
+            std::tie(timestep,agent_id,task_id,seq_id) = e;
+            ev.push_back(timestep);
+            ev.push_back(agent_id);
+            ev.push_back(task_id);
+            ev.push_back(seq_id);
+            event.push_back(ev);
         }
-        js["actualPaths"] = apaths;
+        js["events"] = event;
+
+        // Save all tasks
+        json tasks = task_manager.to_json(map.cols);
+        js["tasks"] = tasks;
     }
 
     if (screen <=1)
     {
-        //planned paths
-        json ppaths = json::array();
-        for (int i = 0; i < num_of_agents; i++)
-        {
-            std::string path;
-            bool first = true;
-            for (const auto action : planner_movements[i])
-            {
-                if (!first)
-                {
-                    path+= ",";
-                } 
-                else 
-                {
-                    first = false;
-                }
-
-                if (action == Action::FW)
-                {
-                    path+="F";
-                }
-                else if (action == Action::CR)
-                {
-                    path+="R";
-                } 
-                else if (action == Action::CCR)
-                {
-                    path+="C";
-                } 
-                else if (action == Action::NA)
-                {
-                    path+="T";
-                }
-                else
-                {
-                    path+="W";
-                }
-            }  
-            ppaths.push_back(path);
-        }
-        js["plannerPaths"] = ppaths;
+        js["plannerPaths"] = simulator.planned_path_to_json();
 
         json planning_times = json::array();
         for (double time: planner_times)
@@ -448,168 +401,93 @@ void BaseSystem::saveResults(const string &fileName, int screen) const
         js["plannerTimes"] = planning_times;
 
         // Save errors
-        json errors = json::array();
-        for (auto error: model->errors)
+        js["errors"] = simulator.action_errors_to_json();
+
+        //actual schedules
+        json aschedules = json::array();
+        for (int i = 0; i < num_of_agents; i++)
+        {
+            std::string schedules;
+            bool first = true;
+            for (const auto schedule : task_manager.actual_schedule[i])
+            {
+                if (!first)
+                {
+                    schedules+= ",";
+                } 
+                else 
+                {
+                    first = false;
+                }
+
+                schedules+=std::to_string(schedule.first);
+                schedules+=":";
+                int tid = schedule.second;
+                schedules+=std::to_string(tid);
+            }  
+            aschedules.push_back(schedules);
+        }
+
+        js["actualSchedule"] = aschedules;
+
+        //planned schedules
+        json pschedules = json::array();
+        for (int i = 0; i < num_of_agents; i++)
+        {
+            std::string schedules;
+            bool first = true;
+            for (const auto schedule : task_manager.planner_schedule[i])
+            {
+                if (!first)
+                {
+                    schedules+= ",";
+                } 
+                else 
+                {
+                    first = false;
+                }
+
+                schedules+=std::to_string(schedule.first);
+                schedules+=":";
+                int tid = schedule.second;
+                schedules+=std::to_string(tid);
+                
+            }  
+            pschedules.push_back(schedules);
+        }
+
+        js["plannerSchedule"] = pschedules;
+
+        // Save errors
+        json schedule_errors = json::array();
+        for (auto error: task_manager.schedule_errors)
         {
             std::string error_msg;
+            int t_id;
             int agent1;
             int agent2;
             int timestep;
-            std::tie(error_msg,agent1,agent2,timestep) = error;
+            std::tie(error_msg,t_id,agent1,agent2,timestep) = error;
             json e = json::array();
+            e.push_back(t_id);
             e.push_back(agent1);
             e.push_back(agent2);
             e.push_back(timestep);
             e.push_back(error_msg);
-            errors.push_back(e);
-
+            schedule_errors.push_back(e);
         }
-        js["errors"] = errors;
 
-        // Save events
-        json events_json = json::array();
-        for (int i = 0; i < num_of_agents; i++)
-        {
-            json event = json::array();
-            for(auto e: events[i])
-            {
-                json ev = json::array();
-                std::string event_msg;
-                int task_id;
-                int timestep;
-                std::tie(task_id,timestep,event_msg) = e;
-                ev.push_back(task_id);
-                ev.push_back(timestep);
-                ev.push_back(event_msg);
-                event.push_back(ev);
-            }
-            events_json.push_back(event);
-        }
-        js["events"] = events_json;
-
-        // Save all tasks
-        json tasks = json::array();
-        for (auto t: all_tasks)
-        {
-            json task = json::array();
-            task.push_back(t.task_id);
-            task.push_back(t.location/map.cols);
-            task.push_back(t.location%map.cols);
-            tasks.push_back(task);
-        }
-        js["tasks"] = tasks;
+        js["scheduleErrors"] = schedule_errors;
     }
 
     std::ofstream f(fileName,std::ios_base::trunc |std::ios_base::out);
-    f << std::setw(4) << js;
-
-}
-
-bool FixedAssignSystem::load_agent_tasks(string fname)
-{
-    string line;
-    std::ifstream myfile(fname.c_str());
-    if (!myfile.is_open()) return false;
-
-    getline(myfile, line);
-    while (!myfile.eof() && line[0] == '#') {
-        getline(myfile, line);
-    }
-
-    boost::char_separator<char> sep(",");
-    boost::tokenizer<boost::char_separator<char>> tok(line, sep);
-    boost::tokenizer<boost::char_separator<char>>::iterator beg = tok.begin();
-
-    num_of_agents = atoi((*beg).c_str());
-    int task_id = 0;
-    // My benchmark
-    if (num_of_agents == 0) {
-        //issue_logs.push_back("Load file failed");
-        std::cerr << "The number of agents should be larger than 0" << endl;
-        exit(-1);
-    }
-    starts.resize(num_of_agents);
-    task_queue.resize(num_of_agents);
-  
-    for (int i = 0; i < num_of_agents; i++)
+    if (pretty_print)
     {
-
-        getline(myfile, line);
-        while (!myfile.eof() && line[0] == '#')
-            getline(myfile, line);
-
-        boost::tokenizer<boost::char_separator<char>> tok(line, sep);
-        boost::tokenizer<boost::char_separator<char>>::iterator beg = tok.begin();
-        // read start [row,col] for agent i
-        int num_landmarks = atoi((*beg).c_str());
-        beg++;
-        auto loc = atoi((*beg).c_str());
-        // agent_start_locations[i] = {loc, 0};
-        starts[i] = State(loc, 0, 0);
-        beg++;
-        for (int j = 0; j < num_landmarks; j++, beg++)
-        {
-            auto loc = atoi((*beg).c_str());
-            task_queue[i].emplace_back(task_id++, loc, 0, i);
-        }
+        f << std::setw(4) << js;
     }
-    myfile.close();
-
-    return true;
-}
-
-
-void FixedAssignSystem::update_tasks()
-{
-    for (int k = 0; k < num_of_agents; k++)
+    else
     {
-        while (assigned_tasks[k].size() < num_tasks_reveal && !task_queue[k].empty())
-        {
-            Task task = task_queue[k].front();
-            task_queue[k].pop_front();
-            assigned_tasks[k].push_back(task);
-            events[k].push_back(make_tuple(task.task_id,timestep,"assigned"));
-            all_tasks.push_back(task);
-            // log_event_assigned(k, task.task_id, timestep);
-        }
+        f << js.dump();
     }
+
 }
-
-
-void TaskAssignSystem::update_tasks()
-{
-    for (int k = 0; k < num_of_agents; k++)
-    {
-        while (assigned_tasks[k].size() < num_tasks_reveal && !task_queue.empty())
-        {
-            Task task = task_queue.front();
-            task.t_assigned = timestep;
-            task.agent_assigned = k;
-            task_queue.pop_front();
-            assigned_tasks[k].push_back(task);
-            events[k].push_back(make_tuple(task.task_id,timestep,"assigned"));
-            all_tasks.push_back(task);
-            // log_event_assigned(k, task.task_id, timestep);
-        }
-    }
-}
-
-
-void InfAssignSystem::update_tasks(){
-    for (int k = 0; k < num_of_agents; k++)
-    {
-        while (assigned_tasks[k].size() < num_tasks_reveal) 
-        {
-            int i = task_counter[k] * num_of_agents + k;
-            int loc = tasks[i%tasks_size];
-            Task task(task_id,loc,timestep,k);
-            assigned_tasks[k].push_back(task);
-            events[k].push_back(make_tuple(task.task_id,timestep,"assigned"));
-            // log_event_assigned(k, task.task_id, timestep);
-            all_tasks.push_back(task);
-            task_id++;
-            task_counter[k]++;
-        }
-    }
-}
-

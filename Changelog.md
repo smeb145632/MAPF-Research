@@ -1,5 +1,90 @@
 # Changelog
 
+Version 3.1.0 - 2026-04-11
+----------------------------
+Added:
+- Added a new Python interface layer with unified bindings for planner, scheduler, and executor (`python/common`) plus Python user templates and package init files.
+- Added large benchmark/example instance sets for maze, room, and iron harvest domains.
+
+Changed:
+- Refactored execution pipeline and shared environment synchronization to improve staged-plan execution and assignment/update ordering.
+- Improved default planner/scheduler behavior for larger maps and higher agent counts.
+
+Fixed:
+- Fixed race-condition and timeout-control issues in scheduling/execution flow.
+- Fixed robustness issues in action validation and executor error handling under delayed and windowed execution.
+
+Version 3.0.0 - 2026-03-13
+----------------------------
+Added:
+- Added support for the `Execution` component to process plans from planning and execution plans under execution uncertainty.
+- Added support for multistep / staged planner execution with periodic planner communication.
+- Added runtime delay generation via `delayConfig` in the input JSON.
+- Added delay interval output (`delayIntervals`) to the output JSON for `outputScreen <= 2`.
+- Added `--prettyPrintJson` option to write human-readable formatted JSON output.
+- Added configurable action counter support via `agentCounter` in the input JSON and `agentMaxCounter` in the output JSON.
+- Added compressed path segment metadata in the output JSON via `outputSegmentSize`.
+
+Changed:
+- Updated the simulator to use an executor-driven planning/execution flow instead of directly consuming returned actions.
+- Updated the action model to support the new collision checking model based on agent footprint (`agentSize`) rather than point occupancy only.
+- Updated the output JSON to include delay information, segmented path metadata, and the current starter-kit version string.
+- Updated timing controls to distinguish preprocessing time, initial planning time, planner communication interval, per-action execution time, and executor plan-processing time.
+- Updated the input format documentation to describe `delayConfig`, `agentCounter`, `--prettyPrintJson`, and delay interval output.
+
+Version 2.1.2 - 2025-01-19
+----------------------------
+Fixed:
+- Bug: If an entry abandons an agent's task without re-assigning a new task, the task manager does not apply this abandon command.
+- Bug: Upgrade file list missing default planner files.
+
+Version 2.1.1 - 2024-11-18
+----------------------------
+Fixed:
+- Bug: Solution costs counted multiple times.
+- Bug: When reassigning a task to an agent with a smaller id, `task->agent_assigned` will be reset to -1 instead of the smaller id agent.  
+
+Added:
+- Docs explaining the anytime behaviour of the default planner.
+
+
+Version 2.1.0 - 2024-11-15
+----------------------------
+Added:
+- Added `new_tasks` API to `SharedEnvironment` to notify the entry of new tasks released at the current timestep.
+- Added `new_freeagents` API to `SharedEnvironment` to notify the entry of new free robots, who newly completed their assigned task, at the current timestep.
+- Added `--logDetailLevel` option to specify the level of details of the log file.
+
+Changes:
+- API `vector<Task> task_pool` in `SharedEnvironment` is now removed. Use `unordered_map<int, Task> task_pool` instead, which uses `task_id` as the key.
+- Documentation updated to reflect the changes in the API.
+- The competition system now waits for entry to return and records the number of timeouts, then progress to the simulator. This prevents the entry using the unrecorded time spent on the simulator.
+- Output JSON records a number of entry timeouts, invalid schedules, and invalid actions.
+- Default Scheduler now uses the new API to schedule tasks.
+- The `update_goal_locations` function in Default Entry is updated to use the new `task_pool` API. (Warning, when updating your entry, make sure you review the changes on `Entry.cpp` and decide how you adapt the changes to your entry implementation.)
+- Update the Python binding to support the updated API.
+- Updated the example python scheduler to use the new API. (Warning, when updating, make sure you review the changes on `pyTaskScheduler.py` and decide how you adapt the changes to your scheduler implementation.)
+- Assigning `task_id` `-1` to an agent to indicate no assigned task. This drops any existing but unopened task. However, assign `-1` to an agent with opened task leads to an invalid schedule error
+
+Version 2.0.0 - 2024-10-2
+----------------------------
+
+Added:
+- Added support for task scheduler
+- Added default planner and task scheduler implementation
+- Added support for combined track
+- Added Python support for new tracks
+- Added Evaluation_Environment.md with details of the evaluation environment
+
+Changes:
+- Time limit uses `ms` as the unit
+- Input-output format of the starter kit updated for the 2024 competition, with support for tasks with precedence constraints
+- Updated documentation for new features
+- Updated RunInDocker.sh to recreate the evaluation environment used for the 2024 competition
+- Evaluation environment support PyTorch and CUDA
+- rename Prepare_Your_Planner.md to Prepare_Your_Submission.md
+
+
 Version 1.1.5 - 2023-11-21
 ----------------------------
 Fixed:

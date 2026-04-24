@@ -4,20 +4,39 @@
 #include "Grid.h"
 #include "Tasks.h"
 #include "ActionModel.h"
-#include "MAPFPlanner.h"
+#include "Plan.h"
+#include "Entry.h"
 #include "Logger.h"
+#include "TaskManager.h"
+#include "DelayGenerator.h"
 #include <pthread.h>
 #include <future>
+#include "Simulator.h"
+#include <memory>
+#include <string>
 
 class BaseSystem
 {
 public:
-    int num_tasks_reveal = 1;
     Logger* logger = nullptr;
 
-	BaseSystem(Grid &grid, MAPFPlanner* planner, ActionModelWithRotate* model):
-        map(grid), planner(planner), env(planner->env), model(model)
-    {}
+	BaseSystem(Grid &grid, Entry* planner, Executor* executor, std::vector<int>& start_locs, std::vector<list<int>>& tasks, ActionModelWithRotate* model, int max_counter = 10):
+      map(grid), planner(planner), env(planner->env), exec_env(executor->env),
+      task_manager(tasks, start_locs.size()), simulator(grid,start_locs,model,executor,max_counter)
+    {
+        num_of_agents = start_locs.size();
+        starts.resize(num_of_agents);
+
+        for (size_t i = 0; i < start_locs.size(); i++)
+        {
+            if (grid.map[start_locs[i]] == 1)
+                {
+                    cout<<"error: agent "<<i<<"'s start location is an obstacle("<<start_locs[i]<<")"<<endl;
+                    exit(0);
+                }
+            starts[i] = State(start_locs[i], 0, 0);
+        }
+    };
 
 	virtual ~BaseSystem()
     {
@@ -30,189 +49,137 @@ public:
         {
             delete planner;
         }
+        // exec_env is a non-owning alias of executor->env.
+        // ~Simulator deletes executor, whose destructor deletes its env.
     };
 
-    void set_num_tasks_reveal(int num){num_tasks_reveal = num;};
-    void set_plan_time_limit(int limit){plan_time_limit = limit;};
+    void set_num_tasks_reveal(float num){task_manager.set_num_tasks_reveal(num);};
+    void set_plan_time_limit(int initial, int comm, int move, int process_new_plan){
+        initial_plan_time_limit = initial;
+        min_comm_time = comm;
+        simulator_time_limit = move;
+        process_new_plan_time_limit = process_new_plan;
+    };
     void set_preprocess_time_limit(int limit){preprocess_time_limit = limit;};
-    void set_logger(Logger* logger){this->logger = logger;}
+    void set_log_level(int level){log_level = level;};
+    void set_logger(Logger* logger){
+        this->logger = logger;
+        task_manager.set_logger(logger);
+    }
 
-	void simulate(int simulation_time);
-    vector<Action> plan();
-    vector<Action> plan_wrapper();
+    void set_delay_generator(std::unique_ptr<DelayGenerator> generator)
+    {
+        simulator.set_delay_generator(std::move(generator));
+    }
+    void set_staged_action_validation_enabled(bool enabled)
+    {
+        simulator.set_staged_action_validation_enabled(enabled);
+    }
 
-    void savePaths(const string &fileName, int option) const; //option = 0: save actual movement, option = 1: save planner movement
+    void simulate(int simulation_time,int chunk_size);
+    bool planner_wrapper();
+    bool planner_wrapper_init();
+
     //void saveSimulationIssues(const string &fileName) const;
-    void saveResults(const string &fileName, int screen) const;
+    void saveResults(const string &fileName, int screen, bool pretty_print = false) const;
+    void set_task_trend_output(const std::string& file_name, int interval);
 
 
 protected:
     Grid map;
+    int simulation_time;
 
-    std::future<std::vector<Action>> future;
+    Plan proposed_plan;
+    vector<int> proposed_schedule;
+
+    int total_timetous = 0;
+
+
+    std::future<bool> future;
     std::thread task_td;
     bool started = false;
 
-    MAPFPlanner* planner;
+    Entry* planner;
     SharedEnvironment* env;
-
-    ActionModelWithRotate* model;
-
-    // #timesteps for simulation
-    int timestep;
+    SharedEnvironment* exec_env;
 
     int preprocess_time_limit=10;
 
-    int plan_time_limit = 3;
+    int plan_time_limit = 0;
 
-    std::vector<Path> paths;
-    std::vector<std::list<Task > > finished_tasks; // location + finish time
+    int initial_plan_time_limit = 1000;
+    int min_comm_time = 1000;
+    int simulator_time_limit = 100;
+    int process_new_plan_time_limit = 100;
+
 
     vector<State> starts;
     int num_of_agents;
 
-    vector<State> curr_states;
-
-    vector<list<Action>> actual_movements;
-    vector<list<Action>> planner_movements;
+    int log_level = 1;
 
     // tasks that haven't been finished but have been revealed to agents;
-    vector< deque<Task > > assigned_tasks;
 
     vector<list<std::tuple<int,int,std::string>>> events;
-    list<Task> all_tasks;
 
     //for evaluation
     vector<int> solution_costs;
-    int num_of_task_finish = 0;
     list<double> planner_times; 
     bool fast_mover_feasible = true;
 
+    std::string task_trend_output_file;
+    int task_trend_interval = 100;
+    int last_task_trend_timestep = 0;
+    int last_task_trend_finished = 0;
 
-	void initialize();
+
+    void initialize();
     bool planner_initialize();
-	virtual void update_tasks() = 0;
+    void write_task_trend_snapshot(int timestep, bool force = false);
 
-    void sync_shared_env();
 
-    list<Task> move(vector<Action>& actions);
+    TaskManager task_manager;
+    Simulator simulator;
+    // deque<Task> task_queue;
+    virtual void sync_shared_env_planner();
+    virtual void sync_shared_env_executor();
+
+    void move(vector<Action>& actions);
     bool valid_moves(vector<State>& prev, vector<Action>& next);
 
     void log_preprocessing(bool succ);
-    void log_event_assigned(int agent_id, int task_id, int timestep);
-    void log_event_finished(int agent_id, int task_id, int timestep);
+    // void log_event_assigned(int agent_id, int task_id, int timestep);
+    // void log_event_finished(int agent_id, int task_id, int timestep);
 
 };
 
 
-class FixedAssignSystem : public BaseSystem
-{
-public:
-	FixedAssignSystem(Grid &grid, string agent_task_filename, MAPFPlanner* planner, ActionModelWithRotate *model):
-        BaseSystem(grid, planner, model)
-    {
-        load_agent_tasks(agent_task_filename);
-    };
+// class TaskAssignSystem : public BaseSystem
+// {
+// public:
+// 	TaskAssignSystem(Grid &grid, MAPFPlanner* planner, std::vector<int>& start_locs, std::vector<int>& tasks, ActionModelWithRotate* model):
+//         BaseSystem(grid, planner, model)
+//     {
+//         int task_id = 0;
+//         for (auto& task_location: tasks)
+//         {
+//             all_tasks.emplace_back(task_id++, task_location);
+//             task_queue.emplace_back(all_tasks.back().task_id, all_tasks.back().locations.front());
+//             //task_queue.emplace_back(task_id++, task_location);
+//         }
+//         num_of_agents = start_locs.size();
+//         starts.resize(num_of_agents);
+//         for (size_t i = 0; i < start_locs.size(); i++)
+//         {
+//             starts[i] = State(start_locs[i], 0, 0);
+//         }
+//     };
 
-	FixedAssignSystem(Grid &grid, MAPFPlanner* planner, std::vector<int>& start_locs, std::vector<vector<int>>& tasks, ActionModelWithRotate* model):
-        BaseSystem(grid, planner, model)
-    {
-        if (start_locs.size() != tasks.size())
-        {
-            std::cerr << "agent num does not match the task assignment" << std::endl;
-            exit(1);
-        }
-
-        int task_id = 0;
-        num_of_agents = start_locs.size();
-        starts.resize(num_of_agents);
-        task_queue.resize(num_of_agents);
-        for (size_t i = 0; i < start_locs.size(); i++)
-        {
-            starts[i] = State(start_locs[i], 0, 0);
-            for (auto& task_location: tasks[i])
-            {
-                all_tasks.emplace_back(task_id++, task_location, 0, (int)i);
-                task_queue[i].emplace_back(all_tasks.back().task_id, all_tasks.back().location, 
-                    all_tasks.back().t_assigned, all_tasks.back().agent_assigned);
-            }
-            // task_queue[i] = deque<int>(tasks[i].begin(), tasks[i].end());
-        }
-    };
-
-	~FixedAssignSystem(){};
-
-    bool load_agent_tasks(string fname);
+// 	~TaskAssignSystem(){};
 
 
-private:
-    vector<deque<Task>> task_queue;
+// private:
+//     deque<Task> task_queue;
 
-	void update_tasks();
-};
-
-
-class TaskAssignSystem : public BaseSystem
-{
-public:
-	TaskAssignSystem(Grid &grid, MAPFPlanner* planner, std::vector<int>& start_locs, std::vector<int>& tasks, ActionModelWithRotate* model):
-        BaseSystem(grid, planner, model)
-    {
-        int task_id = 0;
-        for (auto& task_location: tasks)
-        {
-            all_tasks.emplace_back(task_id++, task_location);
-            task_queue.emplace_back(all_tasks.back().task_id, all_tasks.back().location);
-            //task_queue.emplace_back(task_id++, task_location);
-        }
-        num_of_agents = start_locs.size();
-        starts.resize(num_of_agents);
-        for (size_t i = 0; i < start_locs.size(); i++)
-        {
-            starts[i] = State(start_locs[i], 0, 0);
-        }
-    };
-
-	~TaskAssignSystem(){};
-
-
-private:
-    deque<Task> task_queue;
-
-	void update_tasks();
-};
-
-
-class InfAssignSystem : public BaseSystem
-{
-public:
-	InfAssignSystem(Grid &grid, MAPFPlanner* planner, std::vector<int>& start_locs, std::vector<int>& tasks, ActionModelWithRotate* model):
-        tasks(tasks), BaseSystem(grid, planner, model)
-    {
-        num_of_agents = start_locs.size();
-        starts.resize(num_of_agents);
-        task_counter.resize(num_of_agents,0);
-        tasks_size = tasks.size();
-
-        for (size_t i = 0; i < start_locs.size(); i++)
-        {
-            if (grid.map[start_locs[i]] == 1)
-            {
-                cout<<"error: agent "<<i<<"'s start location is an obstacle("<<start_locs[i]<<")"<<endl;
-                exit(0);
-            }
-            starts[i] = State(start_locs[i], 0, 0);
-        }
-    };
-
-	~InfAssignSystem(){};
-
-
-private:
-    std::vector<int>& tasks;
-    std::vector<int> task_counter;
-    int tasks_size;
-    int task_id = 0;
-
-	void update_tasks();
-};
+// 	void update_tasks();
+// };
