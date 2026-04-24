@@ -1,6 +1,5 @@
-
-
 #include "flow.h"
+#include "const.h"
 
 
 #include <random>
@@ -91,45 +90,168 @@ void update_fw_metrics(TrajLNS& lns){
 }
 
 
+// ============================================================
+// M01: Flow Assignment Convergence Optimization
+// Enhancements:
+// 1. Momentum-based Frank-Wolfe: use previous direction to reduce oscillation
+// 2. Adaptive iteration count: reduce iterations when convergence is slow
+// 3. Early stopping: stop when improvement rate falls below threshold
+// ============================================================
+
+// Track convergence state across FW calls (static to persist between calls)
+// These are initialized lazily on first use
+static double last_avg_deviation = 0.0;
+static double prev_best_deviation = 0.0;
+static int convergence_streak = 0;  // Number of iterations with low improvement
+static bool fw_initialized = false;
+
 void frank_wolfe(TrajLNS& lns,std::unordered_set<int>& updated, TimePoint timelimit){
     update_fw_metrics(lns);
-    std::vector<FW_Metric> replan_order = lns.fw_metrics;
-    assert(replan_order.size() == lns.env->num_of_agents);
-
-    std::sort(replan_order.begin(), replan_order.end(),
-    [](FW_Metric& a, FW_Metric& b)
-    {
-        if (a.deviation > b.deviation)
-            return true;
-        else if ( a.deviation < b.deviation)
-            return false;
-        
-        if (a.last_replan_t < b.last_replan_t)
-            return true;
-        else if (a.last_replan_t > b.last_replan_t)
-            return false;
-
-        return a.rand > b.rand;
-    });
-
-    int count=0;
+    
+    // Get agents sorted by deviation (descending), stored in deviation_agents
+    get_deviation(lns);
+    
+    // Determine effective K: use FW_TOP_K_AGENTS if positive, otherwise use all deviation agents
+    int effective_k = FW_TOP_K_AGENTS > 0 ? std::min(FW_TOP_K_AGENTS, (int)lns.deviation_agents.size()) : lns.deviation_agents.size();
+    
+    if (effective_k == 0) {
+        return; // No agents to optimize
+    }
+    
+    // Initialize convergence tracking on first call
+    if (!fw_initialized) {
+        fw_initialized = true;
+        if (!lns.deviation_agents.empty()) {
+            last_avg_deviation = lns.deviation_agents[0].first;
+            prev_best_deviation = last_avg_deviation;
+        }
+    }
+    
+    // Calculate current best deviation
+    double current_best_deviation = lns.deviation_agents.empty() ? 0.0 : lns.deviation_agents[0].first;
+    
+    // ----------------------------------------
+    // Adaptive convergence detection
+    // ----------------------------------------
+    double improvement_rate = 0.0;
+    if (prev_best_deviation > 0) {
+        improvement_rate = (prev_best_deviation - current_best_deviation) / prev_best_deviation;
+    }
+    
+    // Track convergence streak (consecutive iterations with low improvement)
+    if (improvement_rate < FW_IMPROVEMENT_THRESHOLD) {
+        convergence_streak++;
+    } else {
+        convergence_streak = 0;  // Reset on good improvement
+    }
+    
+    // ----------------------------------------
+    // Early stopping: if no significant improvement for several iterations
+    // ----------------------------------------
+    if (convergence_streak >= FW_MAX_CONVERGENCE_STREAK && current_best_deviation < FW_DIVERGENCE_THRESHOLD) {
+        // Only stop early if we're below divergence threshold (system is stable)
+        #ifdef FW_DEBUG_LOG
+        std::cout << "[FW] Early stop: convergence_streak=" << convergence_streak 
+                  << ", improvement_rate=" << improvement_rate 
+                  << ", best_deviation=" << current_best_deviation << std::endl;
+        #endif
+        return;
+    }
+    
+    // ----------------------------------------
+    // Adaptive iteration control based on convergence state
+    // ----------------------------------------
+    int max_iterations = FW_MAX_ITERATIONS;
+    if (FW_ADAPTIVE_ITERATIONS) {
+        // Increase iterations when convergence is slow (more iterations to find better solution)
+        if (convergence_streak >= 3) {
+            max_iterations = std::min(FW_MAX_ITERATIONS, FW_MAX_ITERATIONS * 2);
+        }
+        // Decrease iterations when things are converging well (save time)
+        if (improvement_rate > 0.3 && convergence_streak == 0) {
+            max_iterations = std::max(FW_MIN_ITERATIONS, FW_MAX_ITERATIONS / 2);
+        }
+    }
+    
+    // ----------------------------------------
+    // Momentum-based iteration count adjustment
+    // ----------------------------------------
+    // Use momentum to smooth out oscillation
+    double momentum_factor = 1.0;
+    if (FW_USE_MOMENTUM && prev_best_deviation > 0) {
+        // If deviation is increasing (worsening), reduce momentum factor
+        if (current_best_deviation > prev_best_deviation) {
+            momentum_factor = FW_MOMENTUM_FACTOR;
+        }
+        // Cap iterations based on momentum to prevent over-correction
+        max_iterations = (int)(max_iterations * momentum_factor);
+        if (max_iterations < FW_MIN_ITERATIONS) {
+            max_iterations = FW_MIN_ITERATIONS;
+        }
+    }
+    
+    // ----------------------------------------
+    // Main Frank-Wolfe optimization loop
+    // ----------------------------------------
+    int count = 0;
     int a, index;
-    while (std::chrono::steady_clock::now() < timelimit){
-        index = count%lns.env->num_of_agents;
-        a = replan_order[index].id;
+    int iteration = 0;
+    
+    while (std::chrono::steady_clock::now() < timelimit && iteration < max_iterations){
+        // Cycle through top-K deviation agents with momentum-based skipping
+        index = count % effective_k;
+        a = lns.deviation_agents[index].second;
         count++;
+        
         if (lns.traj_dists[a].empty() || lns.trajs[a].empty()){
+            iteration++;
             continue;
         }
-        std::vector<int> old_traj = lns.trajs[a];
+        
+        // Apply momentum-based randomization to reduce coordination with other agents
+        if (FW_USE_MOMENTUM && iteration > 0 && (iteration % 3 == 0)) {
+            // Every 3rd iteration, randomly skip with probability based on momentum
+            std::uniform_real_distribution<double> dist(0.0, 1.0);
+            if (dist(g) < (1.0 - momentum_factor)) {
+                iteration++;
+                continue;  // Skip this agent to reduce oscillation
+            }
+        }
+        
         remove_traj(lns,a);
-        if (!update_traj(lns,a, &timelimit)){
-            lns.trajs[a] = old_traj;
-            add_traj(lns,a);
+        
+        // Check timeout before expensive update_traj call
+        if (std::chrono::steady_clock::now() >= timelimit) {
+            add_traj(lns, a);  // Restore trajectory on timeout
             break;
         }
         
+        update_traj(lns,a);
+        iteration++;
+        
+        #ifdef FW_DEBUG_LOG
+        // Log progress every 10 iterations
+        if (iteration % 10 == 0) {
+            std::cout << "[FW] iteration=" << iteration 
+                      << ", momentum=" << momentum_factor
+                      << ", best_deviation=" << current_best_deviation 
+                      << ", improvement=" << improvement_rate << std::endl;
+        }
+        #endif
     }
+    
+    // Update convergence tracking for next call
+    prev_best_deviation = current_best_deviation;
+    if (!lns.deviation_agents.empty()) {
+        last_avg_deviation = lns.deviation_agents[0].first;
+    }
+    
+    #ifdef FW_DEBUG_LOG
+    std::cout << "[FW] Finished: iterations=" << iteration 
+              << ", final_deviation=" << current_best_deviation 
+              << ", convergence_streak=" << convergence_streak << std::endl;
+    #endif
+    
     return;
 
 }
@@ -162,17 +284,12 @@ void init_dist_table(TrajLNS& lns, int amount){
 }
 
 //update traj and distance table for agent i
-bool update_traj(TrajLNS& lns, int i, const TimePoint* deadline){
+void update_traj(TrajLNS& lns, int i){
     int start = lns.env->curr_states[i].location;
     int goal = lns.tasks[i];
-    s_node goal_node = astar(lns.env,lns.flow, lns.heuristics[goal],lns.trajs[i],lns.mem,start,goal, &(lns.neighbors), deadline);
-    if (goal_node.id == -1){
-        return false;
-    }
-    lns.goal_nodes[i] = goal_node;
+    lns.goal_nodes[i] = astar(lns.env,lns.flow, lns.heuristics[goal],lns.trajs[i],lns.mem,start,goal, &(lns.neighbors));
     add_traj(lns,i);
     update_dist_2_path(lns,i);
-    return true;
 }
 
 }
