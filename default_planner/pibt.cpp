@@ -189,7 +189,7 @@ Action getAction(State& prev, int next_loc, SharedEnvironment* env){
 		return Action::CR;
 	}
 	assert(false);
-
+	return Action::W;  // fallback (unreachable in practice)
 }
 
 bool moveCheck(int id, std::vector<bool>& checked,
