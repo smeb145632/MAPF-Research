@@ -12,6 +12,14 @@
 namespace DefaultPlanner{
 int get_gp_h(TrajLNS& lns, int ai, int target){
     int min_heuristic;
+    int goal_loc;
+
+    // Safety check: ensure ai is within bounds of lns.tasks
+    if (ai < 0 || ai >= (int)lns.tasks.size()) {
+        // Fallback to manhattan distance if ai is out of bounds
+        return manhattanDistance(target, 0, lns.env);
+    }
+    goal_loc = lns.tasks[ai];
 
 	if (is_large_map(lns.env)){
 		if (!lns.traj_dists.empty() && !lns.traj_dists[ai].empty())
@@ -20,7 +28,7 @@ int get_gp_h(TrajLNS& lns, int ai, int target){
 		}
 		else
 		{
-			min_heuristic = manhattanDistance(target,lns.tasks.at(ai),lns.env);
+			min_heuristic = manhattanDistance(target, goal_loc, lns.env);
 		}
 		return min_heuristic;
 	}
@@ -29,14 +37,17 @@ int get_gp_h(TrajLNS& lns, int ai, int target){
 		{
 			min_heuristic = get_dist_2_path(lns.traj_dists[ai], lns.env, target, &(lns.neighbors)); 
 		}
-		else if (!lns.heuristics[lns.tasks.at(ai)].empty())
-		{
-			min_heuristic = get_heuristic(lns.heuristics[lns.tasks.at(ai)], lns.env, target, &(lns.neighbors));
-		}
-		else
-		{
-			min_heuristic = manhattanDistance(target,lns.tasks.at(ai),lns.env);
-		}
+		else {
+            auto hit = lns.heuristics.find(goal_loc);
+            if (hit != lns.heuristics.end() && !hit->second.empty())
+            {
+                min_heuristic = get_heuristic(hit->second, lns.env, target, &(lns.neighbors));
+            }
+            else
+            {
+                min_heuristic = manhattanDistance(target, goal_loc, lns.env);
+            }
+        }
 		return min_heuristic;
 	}
 }
@@ -56,7 +67,7 @@ bool causalPIBT(int curr_id, int higher_id,std::vector<State>& prev_states,
 
 	assert(prev_loc >= 0 && prev_loc < lns.env->map.size());
 
-	int target = lns.tasks.at(curr_id);
+	int target = lns.tasks[curr_id];
 
 	if (higher_id == -1){
 		//fist agent in the chain, disallow cyclic movments by preventing other agents moving to first agent's previous location

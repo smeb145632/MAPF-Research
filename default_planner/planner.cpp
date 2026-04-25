@@ -161,10 +161,11 @@ namespace DefaultPlanner{
                 for(int j = 0; j < env->goal_locations[i].size(); j++)
                 {
                     int goal_loc = env->goal_locations[i][j].first;
-                    if (trajLNS.heuristics.at(goal_loc).empty())
+                    HeuristicTable& ht = trajLNS.heuristics[goal_loc];
+                    if (ht.empty())
                     {
                         // 为这个目标位置初始化启发式距离表
-                        init_heuristic(trajLNS.heuristics[goal_loc], env, goal_loc);
+                        init_heuristic(ht, env, goal_loc);
                     }
                 }
             }
