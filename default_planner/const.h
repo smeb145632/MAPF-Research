@@ -88,6 +88,15 @@ namespace DefaultPlanner
     const int LNS_MIN_NEIGHBORHOOD_SIZE = 2;
 
     // ============================================================
+    // H12: PIBT Path Quality Enhancement
+    // Path-length-based priority weighting to improve conflict resolution
+    // Shorter remaining path = higher priority (reduces goal-area congestion)
+    // ============================================================
+
+    // Path-length weight in priority calculation: shorter remaining path -> higher priority
+    const double PIBT_PRIORITY_PATH_LENGTH_WEIGHT = 1.0;
+
+    // ============================================================
     // SIPPS (Safe Interval Path Planning with Soft constraints) configuration
     // Used when replanning paths with soft obstacles (other agents' paths)
     // ============================================================

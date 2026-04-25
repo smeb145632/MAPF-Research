@@ -224,6 +224,16 @@ namespace DefaultPlanner{
             {
                 local_priority[i] = local_priority[i] + 10;
             }
+
+            // H12: path-length priority boost - shorter remaining paths get higher priority
+            // This reduces goal-area congestion (paris city map optimization)
+            if (PIBT_PRIORITY_PATH_LENGTH_WEIGHT > 0 && !trajLNS.trajs[i].empty())
+            {
+                int path_len = trajLNS.trajs[i].size();
+                double remaining_ratio = 1.0 - (double)path_len / 200.0;
+                if (remaining_ratio < 0) remaining_ratio = 0;
+                local_priority[i] += PIBT_PRIORITY_PATH_LENGTH_WEIGHT * remaining_ratio;
+            }
         }
     }
 
@@ -303,10 +313,19 @@ namespace DefaultPlanner{
                 next_states[i] = State(decided[i].loc, -1, -1);
             }
 
-            // 死角检?
+            // H12: dead corner priority boost
             if (!env->goal_locations[i].empty() && trajLNS.neighbors[env->curr_states[i].location].size() == 1)
             {
                 local_priority[i] = local_priority[i] + 10;
+            }
+
+            // H12: path-length priority boost - shorter remaining paths get higher priority
+            if (PIBT_PRIORITY_PATH_LENGTH_WEIGHT > 0 && !trajLNS.trajs[i].empty())
+            {
+                int path_len = trajLNS.trajs[i].size();
+                double remaining_ratio = 1.0 - (double)path_len / 200.0;
+                if (remaining_ratio < 0) remaining_ratio = 0;
+                local_priority[i] += PIBT_PRIORITY_PATH_LENGTH_WEIGHT * remaining_ratio;
             }
         }
     }
