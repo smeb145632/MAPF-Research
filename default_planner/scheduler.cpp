@@ -62,12 +62,25 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
             dist = 0;
             c_loc = env->curr_states.at(i).location;
 
-            // iterate over the locations (errands) of the task to compute the makespan to finish the task
-            // makespan: the time for the agent to complete all the errands of the task t_id in order
-            for (int loc : env->task_pool[t_id].locations){
-                dist += DefaultPlanner::get_h(env, c_loc, loc);
-                c_loc = loc;
+            // H16 improvement: consider BOTH travel distance AND task internal distance
+            // This helps on paris/city maps where manhattan heuristic has high error.
+            // We want to avoid assigning all long tasks to the same "closest" agent.
+            
+            // Part 1: Travel distance from agent to first task waypoint
+            int travel_dist = DefaultPlanner::get_h(env, c_loc, env->task_pool[t_id].locations[0]);
+            
+            // Part 2: Task internal distance (path through all waypoints)
+            int task_internal = 0;
+            int prev_loc = env->task_pool[t_id].locations[0];
+            for (size_t k = 1; k < env->task_pool[t_id].locations.size(); k++){
+                task_internal += DefaultPlanner::get_h(env, prev_loc, env->task_pool[t_id].locations[k]);
+                prev_loc = env->task_pool[t_id].locations[k];
             }
+            
+            // H16: Combined cost = travel + task internal
+            // Using a weighted sum: travel gets full weight, task internal gets smaller weight
+            // This prevents long tasks from being unfairly assigned to just "closest" agents
+            dist = travel_dist + task_internal / 2;
 
             // update the new minimum makespan
             if (dist < min_task_makespan){
