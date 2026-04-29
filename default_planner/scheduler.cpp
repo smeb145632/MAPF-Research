@@ -3,42 +3,52 @@
 // Keeps persistent sets of free agents and free tasks across timesteps, then
 // greedily matches each free agent to the task with minimum heuristic distance
 // makespan. This is intentionally simple and serves as a reference scheduler.
+//
+// H23 Enhancement: Track task age in free_tasks. Old tasks get distance penalty
+// to encourage reassignment when initial assignment was suboptimal.
 
 #include "scheduler.h"
+#include "heuristics.h"
 
 namespace DefaultPlanner{
 
 std::mt19937 mt;
 std::unordered_set<int> free_agents;
 std::unordered_set<int> free_tasks;
+std::unordered_map<int, int> task_age_map;  // task_id -> timestep when task entered free_tasks
 
 void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
 {
-    // cout<<"schedule initialise limit" << preprocess_time_limit<<endl;
-    // DefaultPlanner::init_heuristics(env);
     mt.seed(0);
+    free_agents.clear();
+    free_tasks.clear();
+    task_age_map.clear();
     return;
 }
 
 void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  SharedEnvironment* env)
 {
-    //use at most half of time_limit to compute schedule, -10 for timing error tolerance
-    //so that the remainning time are left for path planner
     TimePoint endtime = std::chrono::steady_clock::now() + std::chrono::milliseconds(time_limit);
-    // cout<<"schedule plan limit" << time_limit <<endl;
+    int current_time = env->curr_timestep;
 
-    // the default scheduler keep track of all the free agents and unassigned (=free) tasks across timesteps
-    free_agents.insert(env->new_freeagents.begin(), env->new_freeagents.end());
+    // Add new tasks to free_tasks and track their age
+    for (int t_id : env->new_tasks)
+    {
+        if (free_tasks.find(t_id) == free_tasks.end())
+        {
+            // New task entering free pool - record its entry timestep
+            task_age_map[t_id] = current_time;
+        }
+    }
     free_tasks.insert(env->new_tasks.begin(), env->new_tasks.end());
+    free_agents.insert(env->new_freeagents.begin(), env->new_freeagents.end());
 
     int min_task_i, min_task_makespan, dist, c_loc, count;
     clock_t start = clock();
 
-    // iterate over the free agents to decide which task to assign to each of them
     std::unordered_set<int>::iterator it = free_agents.begin();
     while (it != free_agents.end())
     {
-        //keep assigning until timeout
         if (std::chrono::steady_clock::now() > endtime)
         {
             break;
@@ -51,10 +61,8 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
         min_task_makespan = INT_MAX;
         count = 0;
 
-        // iterate over all the unassigned tasks to find the one with the minimum makespan for agent i
         for (int t_id : free_tasks)
         {
-            //check for timeout every 10 task evaluations
             if (count % 10 == 0 && std::chrono::steady_clock::now() > endtime)
             {
                 break;
@@ -62,14 +70,9 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
             dist = 0;
             c_loc = env->curr_states.at(i).location;
 
-            // H16 improvement: consider BOTH travel distance AND task internal distance
-            // This helps on paris/city maps where manhattan heuristic has high error.
-            // We want to avoid assigning all long tasks to the same "closest" agent.
-            
-            // Part 1: Travel distance from agent to first task waypoint
+            // H16: Travel + task internal distance
             int travel_dist = DefaultPlanner::get_h(env, c_loc, env->task_pool[t_id].locations[0]);
             
-            // Part 2: Task internal distance (path through all waypoints)
             int task_internal = 0;
             int prev_loc = env->task_pool[t_id].locations[0];
             for (size_t k = 1; k < env->task_pool[t_id].locations.size(); k++){
@@ -77,12 +80,28 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                 prev_loc = env->task_pool[t_id].locations[k];
             }
             
-            // H16: Combined cost = travel + task internal
-            // Using a weighted sum: travel gets full weight, task internal gets smaller weight
-            // This prevents long tasks from being unfairly assigned to just "closest" agents
             dist = travel_dist + task_internal / 2;
 
-            // update the new minimum makespan
+            // H23: Age-based distance penalty
+            // Old tasks get penalized so they're more likely to be reassigned
+            auto age_it = task_age_map.find(t_id);
+            if (age_it != task_age_map.end())
+            {
+                int task_age = current_time - age_it->second;
+                
+                // Force-reassign very old tasks (bypass distance, pick them last)
+                if (task_age > TASK_FORCE_REASSIGN_THRESHOLD && TASK_FORCE_REASSIGN_THRESHOLD > 0)
+                {
+                    // Add huge penalty so this task is only chosen if nothing better exists
+                    dist += 10000;
+                }
+                else if (task_age > TASK_REASSIGN_THRESHOLD)
+                {
+                    // Penalize old tasks to encourage reassignment
+                    dist += (task_age - TASK_REASSIGN_THRESHOLD) * REASSIGN_AGE_PENALTY_PER_STEP;
+                }
+            }
+
             if (dist < min_task_makespan){
                 min_task_i = t_id;
                 min_task_makespan = dist;
@@ -90,23 +109,25 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
             count++;            
         }
 
-        // assign the best free task to the agent i (assuming one exists)
         if (min_task_i != -1){
             proposed_schedule[i] = min_task_i;
             it = free_agents.erase(it);
             free_tasks.erase(min_task_i);
+            task_age_map.erase(min_task_i);  // Task no longer in free pool
         }
-        // nothing to assign
         else{
             proposed_schedule[i] = -1;
             it++;
         }
     }
-    // #ifndef NDEBUG
-    // cout << "Time Usage: " <<  ((float)(clock() - start))/CLOCKS_PER_SEC <<endl;
-    // cout << "new free agents: " << env->new_freeagents.size() << " new tasks: "<< env->new_tasks.size() <<  endl;
-    // cout << "free agents: " << free_agents.size() << " free tasks: " << free_tasks.size() << endl;
-    // #endif
+
+    // Clean up task_age_map for tasks that no longer exist
+    // (completed tasks that weren't assigned this round - rare but possible)
+    // We don't explicitly clean here - entries are erased when tasks are assigned.
+    // Tasks that complete while in free_tasks will have stale entries cleaned on next schedule call.
+    // Safe approach: only erase entries we just assigned (already done above).
+    
     return;
 }
+
 }
