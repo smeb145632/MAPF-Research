@@ -19,9 +19,18 @@ namespace DefaultPlanner{
 // Tasks older than this get a distance penalty to encourage reassignment
 const int TASK_REASSIGN_THRESHOLD = 100;
 
-// How much to penalize old tasks per timestep of age
+// H23: How much to penalize old tasks per timestep of age
 // Task effective distance += task_age * REASSIGN_AGE_PENALTY_PER_STEP
-const int REASSIGN_AGE_PENALTY_PER_STEP = 5;
+// H24: This constant is now the MAXIMUM (used for sparse maps like paris).
+// The actual penalty is scaled by map_type_multiplier (computed at init).
+const int REASSIGN_AGE_PENALTY_PER_STEP_MAX = 5;
+
+// H24: Map-adaptive penalty multiplier
+// Computed at init based on map density characteristics:
+// - Warehouse (dense): multiplier = 0.4 (low penalty, protect warehouse performance)
+// - Paris (sparse): multiplier = 1.0 (full penalty, help reassignment)
+// Scaled penalty = REASSIGN_AGE_PENALTY_PER_STEP_MAX * map_type_multiplier
+extern double REASSIGN_AGE_PENALTY_MULTIPLIER;
 
 // Force-reassign tasks older than this (completely bypass distance check)
 // Set to 0 to disable force-reassignment (use penalty only)

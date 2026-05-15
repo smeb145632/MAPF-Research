@@ -16,6 +16,10 @@ std::mt19937 mt;
 std::unordered_set<int> free_agents;
 std::unordered_set<int> free_tasks;
 std::unordered_map<int, int> task_age_map;  // task_id -> timestep when task entered free_tasks
+// H24: Map-adaptive penalty multiplier (0.0 to 1.0)
+// 0.4 for dense maps (warehouse) -> low penalty, protect WH
+// 1.0 for sparse maps (paris) -> full penalty, encourage reassignment
+double REASSIGN_AGE_PENALTY_MULTIPLIER = 1.0;
 
 void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
 {
@@ -23,6 +27,54 @@ void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
     free_agents.clear();
     free_tasks.clear();
     task_age_map.clear();
+
+    // H24: Map-adaptive feature detection
+    // Detect whether this is a dense map (warehouse) or sparse map (paris)
+    // by sampling average agent-to-task heuristic distances.
+    // Dense maps have low average distances, sparse maps have high ones.
+    if (env->num_of_agents > 0 && !env->new_tasks.empty())
+    {
+        const int SAMPLE_SIZE = std::min(20, (int)env->new_tasks.size());
+        long long total_dist = 0;
+        int sample_count = 0;
+
+        // Sample tasks and compute distances from random agents
+        std::vector<int> task_ids(env->new_tasks.begin(), env->new_tasks.end());
+        std::shuffle(task_ids.begin(), task_ids.end(), mt);
+
+        for (int s = 0; s < SAMPLE_SIZE; s++)
+        {
+            int t_id = task_ids[s];
+            // Use first task location
+            int t_loc = env->task_pool[t_id].locations[0];
+            // Sample a few agents
+            for (int a = 0; a < std::min(5, env->num_of_agents); a++)
+            {
+                int a_loc = env->curr_states[a].location;
+                total_dist += DefaultPlanner::get_h(env, a_loc, t_loc);
+                sample_count++;
+            }
+        }
+
+        double avg_dist = (double)total_dist / (double)sample_count;
+        // Threshold empirically derived from known map characteristics:
+        // Warehouse: avg_dist ~10-30 (dense, agents close to tasks)
+        // Paris: avg_dist ~50-200 (sparse, agents far from tasks)
+        // Use 40 as threshold
+        if (avg_dist < 40.0)
+        {
+            REASSIGN_AGE_PENALTY_MULTIPLIER = 0.4;  // Warehouse: low penalty
+        }
+        else
+        {
+            REASSIGN_AGE_PENALTY_MULTIPLIER = 1.0;  // Paris: full penalty
+        }
+    }
+    else
+    {
+        REASSIGN_AGE_PENALTY_MULTIPLIER = 1.0;  // Default to full penalty
+    }
+
     return;
 }
 
@@ -84,11 +136,13 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
 
             // H23: Age-based distance penalty
             // Old tasks get penalized so they're more likely to be reassigned
+            // H24: Penalty is scaled by REASSIGN_AGE_PENALTY_MULTIPLIER
+            // (0.4 for warehouse/dense, 1.0 for paris/sparse)
             auto age_it = task_age_map.find(t_id);
             if (age_it != task_age_map.end())
             {
                 int task_age = current_time - age_it->second;
-                
+
                 // Force-reassign very old tasks (bypass distance, pick them last)
                 if (task_age > TASK_FORCE_REASSIGN_THRESHOLD && TASK_FORCE_REASSIGN_THRESHOLD > 0)
                 {
@@ -98,7 +152,9 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                 else if (task_age > TASK_REASSIGN_THRESHOLD)
                 {
                     // Penalize old tasks to encourage reassignment
-                    dist += (task_age - TASK_REASSIGN_THRESHOLD) * REASSIGN_AGE_PENALTY_PER_STEP;
+                    // H24: Scale penalty by map-adaptive multiplier
+                    int scaled_penalty = (int)((task_age - TASK_REASSIGN_THRESHOLD) * REASSIGN_AGE_PENALTY_PER_STEP_MAX * REASSIGN_AGE_PENALTY_MULTIPLIER);
+                    dist += scaled_penalty;
                 }
             }
 
