@@ -46,6 +46,9 @@ namespace DefaultPlanner{
     std::vector<bool> occupied;     // 位置是否被占用的标记
     std::vector<DCR> decided;       // 每个 agent?已决定动?状?
     std::vector<bool> checked;      // 移动检查标?
+    // H20: Blocked agent tracking - count consecutive steps agent failed to move
+    std::vector<int> agent_blocked_count;  // agent_id -> consecutive steps unable to move
+
     std::vector<bool> require_guide_path;  // 是否需要重新计算引导路?
     std::vector<int> dummy_goals;   // 虚拟目标（当 agent 没有任务时使用）
     TrajLNS trajLNS;                // Trajectory LNS 数据结构
@@ -234,6 +237,12 @@ namespace DefaultPlanner{
                 if (remaining_ratio < 0) remaining_ratio = 0;
                 local_priority[i] += PIBT_PRIORITY_PATH_LENGTH_WEIGHT * remaining_ratio;
             }
+
+            // H20: Blocked agent priority boost
+            if (!agent_blocked_count.empty() && agent_blocked_count[i] > 2)
+            {
+                local_priority[i] += 5.0 * std::min(agent_blocked_count[i] - 2, 10);
+            }
         }
     }
 
@@ -408,6 +417,39 @@ namespace DefaultPlanner{
 
         // 保存当前状态供下一帧使?
         prev_states = next_states;
+
+        // H20: Update blocked count for agents that couldn't move in this step
+        for (int i = 0; i < env->num_of_agents; i++)
+        {
+            if (i >= (int)agent_blocked_count.size())
+                agent_blocked_count.resize(env->num_of_agents, 0);
+
+            if (!env->goal_locations[i].empty())
+            {
+                Action planned_action = one_step_actions.at(i);
+                State expected_next = rollout_next_state(prev_states.at(i), planned_action, env);
+
+                if (planned_action != Action::W && expected_next.location == prev_states.at(i).location)
+                {
+                    agent_blocked_count[i]++;
+                }
+                else if (planned_action == Action::W && expected_next.location == prev_states.at(i).location)
+                {
+                    if (trajLNS.trajs[i].size() < 5)
+                        agent_blocked_count[i]++;
+                    else
+                        agent_blocked_count[i] = 0;
+                }
+                else
+                {
+                    agent_blocked_count[i] = 0;
+                }
+            }
+            else
+            {
+                agent_blocked_count[i] = 0;
+            }
+        }
     }
 
 
