@@ -31,6 +31,12 @@ double REASSIGN_AGE_PENALTY_MULTIPLIER = 1.0;
 // H26: Global re-evaluation state (defined here, declared extern in .h)
 int last_reassess_time = 0;
 
+// H27: Dynamic task switching (efficiency-driven reassignment)
+std::unordered_map<int, int> agent_last_switch_time;
+const double EFFICIENCY_SWITCH_THRESHOLD = 1.5;
+const int TASK_SWITCH_COOLDOWN = 100;
+
+
 void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
 {
     mt.seed(0);
@@ -40,6 +46,7 @@ void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
     agent_assigned_task.clear();
     task_start_time.clear();
     last_reassess_time = 0;
+    agent_last_switch_time.clear();
 
     // H26: Map-adaptive feature detection
     // Detect whether this is a dense map (warehouse) or sparse map (paris)
@@ -152,6 +159,65 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                         // Mark task age as very old to force reassignment
                         task_age_map[task_id] = current_time - TASK_FORCE_REASSIGN_THRESHOLD - 10;
                     }
+                }
+            }
+        }
+    }
+
+
+    // H27: Efficiency-driven task switching
+    if (do_reassess && !free_agents.empty() && !agent_assigned_task.empty())
+    {
+        for (int a : free_agents)
+        {
+            auto switch_it = agent_last_switch_time.find(a);
+            if (switch_it != agent_last_switch_time.end() && (current_time - switch_it->second) < TASK_SWITCH_COOLDOWN)
+                continue;
+            
+            int curr_task_id = env->curr_task_schedule[a];
+            if (curr_task_id < 0) continue;
+            
+            int agent_loc = env->curr_states[a].location;
+            int goal_loc = env->task_pool[curr_task_id].locations.back();
+            int remaining = DefaultPlanner::get_h(env, agent_loc, goal_loc);
+            
+            auto start_it = task_start_time.find(curr_task_id);
+            int time_elapsed = (start_it != task_start_time.end()) ? (current_time - start_it->second) : 1;
+            int progress = DefaultPlanner::get_h(env, env->task_pool[curr_task_id].locations[0], goal_loc) - remaining;
+            double curr_efficiency = (time_elapsed > 0) ? ((double)progress / (double)time_elapsed) : 0.0;
+            
+            if (curr_efficiency < 0.3)
+            {
+                int best_free_task = -1;
+                double best_efficiency = curr_efficiency * EFFICIENCY_SWITCH_THRESHOLD;
+                
+                for (int free_task_id : free_tasks)
+                {
+                    int t_loc = env->task_pool[free_task_id].locations[0];
+                    int travel_dist = DefaultPlanner::get_h(env, agent_loc, t_loc);
+                    int task_goal = env->task_pool[free_task_id].locations.back();
+                    int task_dist = DefaultPlanner::get_h(env, t_loc, task_goal);
+                    int new_total_dist = travel_dist + task_dist;
+                    
+                    double free_efficiency = (new_total_dist > 0) ? (1.0 / (double)new_total_dist) : 1.0;
+                    
+                    if (free_efficiency > best_efficiency)
+                    {
+                        best_efficiency = free_efficiency;
+                        best_free_task = free_task_id;
+                    }
+                }
+                
+                if (best_free_task != -1 && best_efficiency > curr_efficiency * EFFICIENCY_SWITCH_THRESHOLD)
+                {
+                    proposed_schedule[a] = best_free_task;
+                    task_age_map[curr_task_id] = current_time - TASK_REASSIGN_THRESHOLD - 10;
+                    free_tasks.erase(best_free_task);
+                    agent_assigned_task[a] = best_free_task;
+                    task_start_time[best_free_task] = current_time;
+                    task_start_time.erase(curr_task_id);
+                    agent_last_switch_time[a] = current_time;
+                    free_agents.erase(a);
                 }
             }
         }
