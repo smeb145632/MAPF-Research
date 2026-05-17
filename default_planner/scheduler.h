@@ -36,6 +36,17 @@ extern double REASSIGN_AGE_PENALTY_MULTIPLIER;
 // Set to 0 to disable force-reassignment (use penalty only)
 const int TASK_FORCE_REASSIGN_THRESHOLD = 200;
 
+// H26: Global re-evaluation interval (in timesteps)
+// Every REASSESS_INTERVAL steps, the scheduler checks assigned tasks
+// and marks inefficient ones (low progress) for reassignment
+const int REASSESS_INTERVAL = 50;
+
+// H26: Batch assignment tracking (defined in .cpp, declared here for extern access)
+// Not directly used in scheduler.h, but needed for linker
+extern std::unordered_map<int, int> agent_assigned_task;
+extern std::unordered_map<int, int> task_start_time;
+extern int last_reassess_time;
+
 // ============================================================
 
 void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env);

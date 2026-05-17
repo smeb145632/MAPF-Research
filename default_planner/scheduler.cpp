@@ -6,6 +6,7 @@
 //
 // H23 Enhancement: Track task age in free_tasks. Old tasks get distance penalty
 // to encourage reassignment when initial assignment was suboptimal.
+// H26 Enhancement: Batch assignment + global re-evaluation every 50 steps.
 
 #include "scheduler.h"
 #include "heuristics.h"
@@ -16,10 +17,19 @@ std::mt19937 mt;
 std::unordered_set<int> free_agents;
 std::unordered_set<int> free_tasks;
 std::unordered_map<int, int> task_age_map;  // task_id -> timestep when task entered free_tasks
-// H24: Map-adaptive penalty multiplier (0.0 to 1.0)
+
+// H26: Batch assignment tracking
+// Track which tasks are assigned to which agents for efficiency monitoring
+std::unordered_map<int, int> agent_assigned_task;  // agent_id -> task_id (currently executing)
+std::unordered_map<int, int> task_start_time;     // task_id -> timestep when task was assigned
+
+// H26: Map-adaptive penalty multiplier (0.0 to 1.0)
 // 0.4 for dense maps (warehouse) -> low penalty, protect WH
 // 1.0 for sparse maps (paris) -> full penalty, encourage reassignment
 double REASSIGN_AGE_PENALTY_MULTIPLIER = 1.0;
+
+// H26: Global re-evaluation state (defined here, declared extern in .h)
+int last_reassess_time = 0;
 
 void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
 {
@@ -27,8 +37,11 @@ void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
     free_agents.clear();
     free_tasks.clear();
     task_age_map.clear();
+    agent_assigned_task.clear();
+    task_start_time.clear();
+    last_reassess_time = 0;
 
-    // H24: Map-adaptive feature detection
+    // H26: Map-adaptive feature detection
     // Detect whether this is a dense map (warehouse) or sparse map (paris)
     // by sampling average agent-to-task heuristic distances.
     // Dense maps have low average distances, sparse maps have high ones.
@@ -82,6 +95,67 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
 {
     TimePoint endtime = std::chrono::steady_clock::now() + std::chrono::milliseconds(time_limit);
     int current_time = env->curr_timestep;
+
+    // H26: Update agent->task mapping for currently executing tasks
+    // This tracks which agents are working on which tasks
+    for (int a = 0; a < env->num_of_agents; a++)
+    {
+        int task_id = env->curr_task_schedule[a];
+        if (task_id >= 0)
+        {
+            // Agent is executing a task
+            if (agent_assigned_task.find(a) == agent_assigned_task.end())
+            {
+                // New assignment - record it
+                agent_assigned_task[a] = task_id;
+                task_start_time[task_id] = current_time;
+            }
+        }
+        else
+        {
+            // Agent is free - remove from tracking
+            auto it = agent_assigned_task.find(a);
+            if (it != agent_assigned_task.end())
+            {
+                agent_assigned_task.erase(it);
+            }
+        }
+    }
+    
+    // H26: Global re-evaluation every REASSESS_INTERVAL steps
+    bool do_reassess = (current_time - last_reassess_time >= REASSESS_INTERVAL);
+    
+    // H26: Mark tasks with low efficiency for reassignment during global re-evaluation
+    if (do_reassess && !agent_assigned_task.empty())
+    {
+        last_reassess_time = current_time;
+        // For each assigned task, compute efficiency = progress / time_elapsed
+        for (auto& at : agent_assigned_task)
+        {
+            int task_id = at.second;
+            auto start_it = task_start_time.find(task_id);
+            if (start_it != task_start_time.end())
+            {
+                int time_elapsed = current_time - start_it->second;
+                if (time_elapsed > 20)  // Only consider tasks running > 20 steps
+                {
+                    // Get progress: how close is agent to goal?
+                    int agent_id = at.first;
+                    int goal_loc = env->task_pool[task_id].locations.back();
+                    int agent_loc = env->curr_states[agent_id].location;
+                    int remaining = DefaultPlanner::get_h(env, agent_loc, goal_loc);
+                    int initial_dist = DefaultPlanner::get_h(env, env->task_pool[task_id].locations[0], goal_loc);
+                    
+                    // Efficiency: if remaining is still >80% of initial after 20+ steps, task is inefficient
+                    if (initial_dist > 0 && remaining > initial_dist * 8 / 10)
+                    {
+                        // Mark task age as very old to force reassignment
+                        task_age_map[task_id] = current_time - TASK_FORCE_REASSIGN_THRESHOLD - 10;
+                    }
+                }
+            }
+        }
+    }
 
     // Add new tasks to free_tasks and track their age
     for (int t_id : env->new_tasks)
@@ -177,12 +251,6 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
         }
     }
 
-    // Clean up task_age_map for tasks that no longer exist
-    // (completed tasks that weren't assigned this round - rare but possible)
-    // We don't explicitly clean here - entries are erased when tasks are assigned.
-    // Tasks that complete while in free_tasks will have stale entries cleaned on next schedule call.
-    // Safe approach: only erase entries we just assigned (already done above).
-    
     return;
 }
 
