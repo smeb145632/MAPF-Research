@@ -44,6 +44,49 @@ const int WAIT_THRESHOLD = 15;
 // Minimum steps between task switches (cooldown to prevent thrashing)
 const int TASK_SWITCH_COOLDOWN_H31 = 80;
 
+// H32: Mutual Inhibition Switching
+// When two tasks have >70% path overlap AND both agents are low efficiency,
+// switch one agent to a different task for better load distribution.
+std::unordered_map<int, std::vector<int>> task_location_cache;
+const double MUTUAL_INHIBITION_OVERLAP_THRESHOLD = 0.70;
+const double MUTUAL_INHIBITION_EFFICIENCY_THRESHOLD = 0.3;
+const int MUTUAL_SWITCH_COOLDOWN = 100;
+
+void update_task_location_cache(int task_id, SharedEnvironment* env) {
+    if (task_location_cache.find(task_id) != task_location_cache.end()) return;
+    if (env->task_pool.find(task_id) == env->task_pool.end()) return;
+    std::vector<int> locs;
+    const auto& task_locs = env->task_pool[task_id].locations;
+    for (int loc : task_locs) locs.push_back(loc);
+    task_location_cache[task_id] = locs;
+}
+
+double calculate_overlap_ratio(int task1_id, int task2_id) {
+    if (task_location_cache.find(task1_id) == task_location_cache.end() ||
+        task_location_cache.find(task2_id) == task_location_cache.end()) return 0.0;
+    const auto& locs1 = task_location_cache[task1_id];
+    const auto& locs2 = task_location_cache[task2_id];
+    std::unordered_set<int> set1(locs1.begin(), locs1.end());
+    std::unordered_set<int> set2(locs2.begin(), locs2.end());
+    int intersection = 0;
+    for (int loc : set1) if (set2.find(loc) != set2.end()) intersection++;
+    int union_count = (int)set1.size() + (int)set2.size() - intersection;
+    if (union_count == 0) return 0.0;
+    return (double)intersection / (double)union_count;
+}
+
+double get_agent_efficiency(int a, int curr_task_id, SharedEnvironment* env, int current_time) {
+    if (curr_task_id < 0) return 0.0;
+    auto start_it = task_start_time.find(curr_task_id);
+    int time_elapsed = (start_it != task_start_time.end()) ? (current_time - start_it->second) : 1;
+    int agent_loc = env->curr_states[a].location;
+    int goal_loc = env->task_pool[curr_task_id].locations.back();
+    int remaining = DefaultPlanner::get_h(env, agent_loc, goal_loc);
+    int initial_dist = DefaultPlanner::get_h(env, env->task_pool[curr_task_id].locations[0], goal_loc);
+    int progress = initial_dist - remaining;
+    return (time_elapsed > 0) ? ((double)progress / (double)time_elapsed) : 0.0;
+}
+
 
 void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
 {
@@ -263,6 +306,85 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                     task_start_time.erase(curr_task_id);
                     agent_last_switch_time[a] = current_time;
                     free_agents.erase(a);
+                }
+            }
+        }
+    }
+
+    // H32: Mutual Inhibition Switching
+    // Detect task pairs with high path overlap, switch one agent to break conflict
+    if (do_reassess && !agent_assigned_task.empty() && !free_tasks.empty())
+    {
+        // Update location cache for all assigned tasks
+        for (auto& at : agent_assigned_task) {
+            update_task_location_cache(at.second, env);
+        }
+        
+        // Build agent->task mapping and efficiency for each agent
+        std::vector<int> agents_with_tasks;
+        for (auto& at : agent_assigned_task) {
+            agents_with_tasks.push_back(at.first);
+        }
+        
+        // Check pairs of agents for mutual inhibition
+        for (size_t i = 0; i < agents_with_tasks.size(); i++) {
+            int a1 = agents_with_tasks[i];
+            int task1 = agent_assigned_task[a1];
+            
+            // Skip if agent is in cooldown
+            auto switch_it1 = agent_last_switch_time.find(a1);
+            if (switch_it1 != agent_last_switch_time.end() && 
+                (current_time - switch_it1->second) < MUTUAL_SWITCH_COOLDOWN) continue;
+            
+            for (size_t j = i + 1; j < agents_with_tasks.size(); j++) {
+                int a2 = agents_with_tasks[j];
+                int task2 = agent_assigned_task[a2];
+                
+                // Check overlap ratio
+                double overlap = calculate_overlap_ratio(task1, task2);
+                if (overlap < MUTUAL_INHIBITION_OVERLAP_THRESHOLD) continue;
+                
+                // Both agents must be low efficiency
+                double eff1 = get_agent_efficiency(a1, task1, env, current_time);
+                double eff2 = get_agent_efficiency(a2, task2, env, current_time);
+                
+                if (eff1 > MUTUAL_INHIBITION_EFFICIENCY_THRESHOLD && 
+                    eff2 > MUTUAL_INHIBITION_EFFICIENCY_THRESHOLD) continue;
+                
+                // Decide which agent to switch (pick the one with lower efficiency)
+                int switch_agent = (eff1 < eff2) ? a1 : a2;
+                int switch_task = (eff1 < eff2) ? task1 : task2;
+                int stay_agent = (eff1 < eff2) ? a2 : a1;
+                
+                // Find best free task for switch_agent
+                int agent_loc = env->curr_states[switch_agent].location;
+                int best_free_task = -1;
+                double best_score = -1.0;
+                for (int free_task_id : free_tasks) {
+                    if (free_task_id == switch_task) continue;
+                    update_task_location_cache(free_task_id, env);
+                    double overlap_with_stay = calculate_overlap_ratio(free_task_id, agent_assigned_task[stay_agent]);
+                    if (overlap_with_stay > MUTUAL_INHIBITION_OVERLAP_THRESHOLD) continue;
+                    
+                    int t_loc = env->task_pool[free_task_id].locations[0];
+                    int travel_dist = DefaultPlanner::get_h(env, agent_loc, t_loc);
+                    int task_goal = env->task_pool[free_task_id].locations.back();
+                    int task_dist = DefaultPlanner::get_h(env, t_loc, task_goal);
+                    int new_total_dist = travel_dist + task_dist;
+                    double score = (new_total_dist > 0) ? (1000.0 / (double)new_total_dist) : 1000.0;
+                    if (score > best_score) { best_score = score; best_free_task = free_task_id; }
+                }
+                
+                if (best_free_task != -1) {
+                    proposed_schedule[switch_agent] = best_free_task;
+                    task_age_map[switch_task] = current_time - TASK_REASSIGN_THRESHOLD - 10;
+                    free_tasks.erase(best_free_task);
+                    agent_assigned_task[switch_agent] = best_free_task;
+                    task_start_time[best_free_task] = current_time;
+                    task_start_time.erase(switch_task);
+                    agent_last_switch_time[switch_agent] = current_time;
+                    task_location_cache.erase(switch_task);
+                    break;
                 }
             }
         }
