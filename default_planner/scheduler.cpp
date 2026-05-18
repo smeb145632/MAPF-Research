@@ -215,16 +215,18 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
         agent_prev_remaining[a] = remaining;
     }
 
-    // H31: Wait-time based task switching
-    // Trigger when agent has been blocked for WAIT_THRESHOLD consecutive steps
-    if (do_reassess && !free_agents.empty() && !agent_assigned_task.empty())
+    // H40: Blocked-agent task switching (FIX for H31 bug)
+    // H31 only checked free_agents, but in lifelong scenario free_agents is always nearly empty
+    // because new tasks are assigned immediately when agents finish. Now we scan all assigned agents.
+    if (do_reassess && !agent_assigned_task.empty())
     {
-        for (int a : free_agents)
+        for (const auto& at : agent_assigned_task)
         {
+            int a = at.first;
             auto switch_it = agent_last_switch_time.find(a);
             if (switch_it != agent_last_switch_time.end() && (current_time - switch_it->second) < TASK_SWITCH_COOLDOWN_H31)
                 continue;
-            int curr_task_id = env->curr_task_schedule[a];
+            int curr_task_id = at.second;
             if (curr_task_id < 0) continue;
             int wait_count = 0;
             auto wait_it = agent_consecutive_wait.find(a);
@@ -263,8 +265,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                 agent_consecutive_wait[a] = 0;
                 task_start_time.erase(curr_task_id);
                 agent_last_switch_time[a] = current_time;
-                free_agents.erase(a);
-                switch_waiting_triggered++;  // H37: track wait-time switching triggers
+                switch_waiting_triggered++;  // H40: track wait-time switching triggers
             }
         }
     }
