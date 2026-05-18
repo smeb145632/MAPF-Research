@@ -40,7 +40,7 @@ const int TASK_SWITCH_COOLDOWN = 100;
 // Track consecutive steps an agent has made zero progress toward goal
 std::unordered_map<int, int> agent_consecutive_wait;
 std::unordered_map<int, int> agent_prev_remaining;  // agent -> previous step remaining distance
-const int WAIT_THRESHOLD = 15;
+const int WAIT_THRESHOLD = 5;  // H37: lowered from 15 to trigger more frequently
 // Minimum steps between task switches (cooldown to prevent thrashing)
 const int TASK_SWITCH_COOLDOWN_H31 = 80;
 
@@ -51,6 +51,9 @@ std::unordered_map<int, std::vector<int>> task_location_cache;
 const double MUTUAL_INHIBITION_OVERLAP_THRESHOLD = 0.70;
 const double MUTUAL_INHIBITION_EFFICIENCY_THRESHOLD = 0.3;
 const int MUTUAL_SWITCH_COOLDOWN = 100;
+
+// H37: Wait-time switching trigger counter
+int switch_waiting_triggered = 0;
 
 void update_task_location_cache(int task_id, SharedEnvironment* env) {
     if (task_location_cache.find(task_id) != task_location_cache.end()) return;
@@ -261,6 +264,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                 task_start_time.erase(curr_task_id);
                 agent_last_switch_time[a] = current_time;
                 free_agents.erase(a);
+                switch_waiting_triggered++;  // H37: track wait-time switching triggers
             }
         }
     }
