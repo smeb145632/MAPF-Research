@@ -64,11 +64,30 @@ void update_task_location_cache(int task_id, SharedEnvironment* env) {
     task_location_cache[task_id] = locs;
 }
 
-double calculate_overlap_ratio(int task1_id, int task2_id) {
-    if (task_location_cache.find(task1_id) == task_location_cache.end() ||
-        task_location_cache.find(task2_id) == task_location_cache.end()) return 0.0;
-    const auto& locs1 = task_location_cache[task1_id];
-    const auto& locs2 = task_location_cache[task2_id];
+// H45 Fix: calculate_overlap_ratio now reads directly from env->task_pool.locations
+// (bypassing task_location_cache which was never populated due to early exit in update_task_location_cache).
+// In lifelong mode, task locations are only known at assignment time (start + goal),
+// so we compute "potential conflict" as overlap between start/goal location sets.
+double calculate_overlap_ratio(int task1_id, int task2_id, SharedEnvironment* env) {
+    // Try cache first (batch mode), fallback to direct env->task_pool access (lifelong mode)
+    bool cached = (task_location_cache.find(task1_id) != task_location_cache.end() &&
+                  task_location_cache.find(task2_id) != task_location_cache.end());
+    
+    std::vector<int> locs1, locs2;
+    if (cached) {
+        locs1 = task_location_cache[task1_id];
+        locs2 = task_location_cache[task2_id];
+    } else {
+        // H45 Fix: Direct read from env->task_pool for lifelong mode
+        if (env->task_pool.find(task1_id) == env->task_pool.end() ||
+            env->task_pool.find(task2_id) == env->task_pool.end()) return 0.0;
+        const auto& tl1 = env->task_pool[task1_id].locations;
+        const auto& tl2 = env->task_pool[task2_id].locations;
+        // Use first and last locations (start + goal) for overlap computation
+        locs1.assign(tl1.begin(), tl1.end());
+        locs2.assign(tl2.begin(), tl2.end());
+    }
+    
     std::unordered_set<int> set1(locs1.begin(), locs1.end());
     std::unordered_set<int> set2(locs2.begin(), locs2.end());
     int intersection = 0;
@@ -350,7 +369,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                 int task2 = agent_assigned_task[a2];
                 
                 // Check overlap ratio
-                double overlap = calculate_overlap_ratio(task1, task2);
+                double overlap = calculate_overlap_ratio(task1, task2, env);
                 if (overlap < MUTUAL_INHIBITION_OVERLAP_THRESHOLD) continue;
                 
                 // Both agents must be low efficiency
@@ -372,7 +391,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                 for (int free_task_id : free_tasks) {
                     if (free_task_id == switch_task) continue;
                     update_task_location_cache(free_task_id, env);
-                    double overlap_with_stay = calculate_overlap_ratio(free_task_id, agent_assigned_task[stay_agent]);
+                    double overlap_with_stay = calculate_overlap_ratio(free_task_id, agent_assigned_task[stay_agent], env);
                     if (overlap_with_stay > MUTUAL_INHIBITION_OVERLAP_THRESHOLD) continue;
                     
                     int t_loc = env->task_pool[free_task_id].locations[0];
