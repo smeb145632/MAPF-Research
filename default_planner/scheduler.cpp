@@ -105,7 +105,6 @@ void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
     agent_prev_remaining.clear();
 
     // H26: Map-adaptive feature detection
-    // H41: brc202d-specific adjustment - use lower penalty for this map
     if (env->num_of_agents > 0 && !env->new_tasks.empty())
     {
         const int SAMPLE_SIZE = std::min(20, (int)env->new_tasks.size());
@@ -125,13 +124,7 @@ void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
             }
         }
         double avg_dist = (double)total_dist / (double)sample_count;
-        
-        // H41: brc202d-specific detection (game map with high avg distance)
-        // brc202d needs more aggressive task reassignment to reach 193+
-        // avg_dist for brc202d is typically 80-150, warehouse is 20-40
-        if (avg_dist > 60.0 && env->num_of_agents == 200)
-            REASSIGN_AGE_PENALTY_MULTIPLIER = 0.3;  // more aggressive reassignment
-        else if (avg_dist < 40.0)
+        if (avg_dist < 40.0)
             REASSIGN_AGE_PENALTY_MULTIPLIER = 0.4;
         else
             REASSIGN_AGE_PENALTY_MULTIPLIER = 1.0;
