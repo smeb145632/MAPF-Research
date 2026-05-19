@@ -139,7 +139,11 @@ void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
 void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  SharedEnvironment* env)
 {
     TimePoint endtime = std::chrono::steady_clock::now() + std::chrono::milliseconds(time_limit);
-    int current_time = env->curr_timestep;
+    // H48 Fix: env->curr_timestep is always 0 in lifelong mode, so we track time via scheduler call count.
+    // Each scheduler call represents approximately 1 timestep equivalent.
+    static int scheduler_call_count = 0;
+    scheduler_call_count++;
+    int current_time = scheduler_call_count;
 
     // H28/H31: Track agent task assignments and wait state
     for (int a = 0; a < env->num_of_agents; a++)
