@@ -55,6 +55,16 @@ const int MUTUAL_SWITCH_COOLDOWN = 100;
 // H37: Wait-time switching trigger counter
 int switch_waiting_triggered = 0;
 
+// H49.1: EGTS - Efficient Guided Task Swap
+// Operates on assigned tasks directly without depending on free_tasks being non-empty
+std::unordered_map<int, int> egts_last_swap_time;
+const double EGTS_EFFICIENCY_THRESHOLD = 0.3;
+const double EGTS_SWAP_GAIN_THRESHOLD = 0.2;
+const int EGTS_TASK_EARLY_THRESHOLD = 5;
+const int EGTS_SWAP_COOLDOWN = 60;
+
+void efficient_task_swap(std::vector<int>& proposed_schedule, SharedEnvironment* env, int current_time);
+
 void update_task_location_cache(int task_id, SharedEnvironment* env) {
     if (task_location_cache.find(task_id) != task_location_cache.end()) return;
     if (env->task_pool.find(task_id) == env->task_pool.end()) return;
@@ -109,6 +119,72 @@ double get_agent_efficiency(int a, int curr_task_id, SharedEnvironment* env, int
     return (time_elapsed > 0) ? ((double)progress / (double)time_elapsed) : 0.0;
 }
 
+void efficient_task_swap(std::vector<int>& proposed_schedule, SharedEnvironment* env, int current_time) {
+    if (agent_assigned_task.empty()) return;
+    std::vector<std::pair<int, int>> all_pairs;
+    for (auto& at : agent_assigned_task) {
+        if (at.second >= 0) all_pairs.push_back(at);
+    }
+    if (all_pairs.size() < 2) return;
+
+    std::vector<int> swapped_agents;
+    for (size_t i = 0; i < all_pairs.size(); i++) {
+        int a1 = all_pairs[i].first;
+        int t1 = all_pairs[i].second;
+        if (t1 < 0) continue;
+        if (std::find(swapped_agents.begin(), swapped_agents.end(), a1) != swapped_agents.end()) continue;
+        auto swap_it1 = egts_last_swap_time.find(a1);
+        if (swap_it1 != egts_last_swap_time.end() &&
+            (current_time - swap_it1->second) < EGTS_SWAP_COOLDOWN) continue;
+        double eff1 = get_agent_efficiency(a1, t1, env, current_time);
+        if (eff1 >= EGTS_EFFICIENCY_THRESHOLD) continue;
+        int task1_idx = env->task_pool[t1].idx_next_loc;
+        if (task1_idx > EGTS_TASK_EARLY_THRESHOLD) continue;
+
+        for (size_t j = i + 1; j < all_pairs.size(); j++) {
+            int a2 = all_pairs[j].first;
+            int t2 = all_pairs[j].second;
+            if (t2 < 0) continue;
+            if (std::find(swapped_agents.begin(), swapped_agents.end(), a2) != swapped_agents.end()) continue;
+            auto swap_it2 = egts_last_swap_time.find(a2);
+            if (swap_it2 != egts_last_swap_time.end() &&
+                (current_time - swap_it2->second) < EGTS_SWAP_COOLDOWN) continue;
+            double eff2 = get_agent_efficiency(a2, t2, env, current_time);
+            if (eff2 >= EGTS_EFFICIENCY_THRESHOLD) continue;
+            int task2_idx = env->task_pool[t2].idx_next_loc;
+            if (task2_idx > EGTS_TASK_EARLY_THRESHOLD) continue;
+
+            int a1_loc = env->curr_states[a1].location;
+            int a2_loc = env->curr_states[a2].location;
+            int t1_start = env->task_pool[t1].locations[0];
+            int t2_start = env->task_pool[t2].locations[0];
+            int a1_to_t1 = DefaultPlanner::get_h(env, a1_loc, t1_start);
+            int a1_to_t2 = DefaultPlanner::get_h(env, a1_loc, t2_start);
+            int a2_to_t1 = DefaultPlanner::get_h(env, a2_loc, t1_start);
+            int a2_to_t2 = DefaultPlanner::get_h(env, a2_loc, t2_start);
+            int old_total = a1_to_t1 + a2_to_t2;
+            int new_total = a1_to_t2 + a2_to_t1;
+            double swap_gain = (old_total > 0) ? ((double)(old_total - new_total) / (double)old_total) : 0.0;
+
+            if (swap_gain > EGTS_SWAP_GAIN_THRESHOLD) {
+                proposed_schedule[a1] = t2;
+                proposed_schedule[a2] = t1;
+                agent_assigned_task[a1] = t2;
+                agent_assigned_task[a2] = t1;
+                task_start_time[t2] = task_start_time[t1];
+                task_start_time[t1] = current_time;
+                egts_last_swap_time[a1] = current_time;
+                egts_last_swap_time[a2] = current_time;
+                agent_consecutive_wait[a1] = 0;
+                agent_consecutive_wait[a2] = 0;
+                swapped_agents.push_back(a1);
+                swapped_agents.push_back(a2);
+                break;
+            }
+        }
+    }
+}
+
 
 void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
 {
@@ -122,6 +198,7 @@ void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
     agent_last_switch_time.clear();
     agent_consecutive_wait.clear();
     agent_prev_remaining.clear();
+    egts_last_swap_time.clear();
 
     // H26: Map-adaptive feature detection
     if (env->num_of_agents > 0 && !env->new_tasks.empty())
@@ -236,6 +313,11 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                 agent_consecutive_wait[a] = 0;
         }
         agent_prev_remaining[a] = remaining;
+    }
+
+    // H49.1: EGTS - run every reassess cycle, independent of free_tasks pool
+    if (do_reassess) {
+        efficient_task_swap(proposed_schedule, env, current_time);
     }
 
     // H40: Blocked-agent task switching (FIX for H31 bug)
