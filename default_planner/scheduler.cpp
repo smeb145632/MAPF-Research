@@ -13,6 +13,7 @@
 
 #include "scheduler.h"
 #include "heuristics.h"
+#include <cstdint>
 
 namespace DefaultPlanner{
 
@@ -57,13 +58,22 @@ int switch_waiting_triggered = 0;
 
 // H49.1: EGTS - Efficient Guided Task Swap
 // Operates on assigned tasks directly without depending on free_tasks being non-empty
-std::unordered_map<int, int> egts_last_swap_time;
+std::unordered_map<int, int> egts_last_swap_time;     // agent-based cooldown
+std::unordered_map<int, int> egts_task_last_swap_time; // H49.2: task-based cooldown
 const double EGTS_EFFICIENCY_THRESHOLD = 0.3;
 const double EGTS_SWAP_GAIN_THRESHOLD = 0.2;
-const int EGTS_TASK_EARLY_THRESHOLD = 5;
-const int EGTS_SWAP_COOLDOWN = 60;
+const int EGTS_AGENT_COOLDOWN = 15;   // H49.2: agent cannot swap again within 15 steps
+const int EGTS_TASK_COOLDOWN = 20;    // H49.2: task cannot be swapped again within 20 steps
+int egts_swap_count = 0;  // H49.1: total swaps executed
+int egts_call_count = 0;  // H49.1: total calls
 
-void efficient_task_swap(std::vector<int>& proposed_schedule, SharedEnvironment* env, int current_time);
+// Waypoint-based progress tracking (EGTS v2)
+struct WaypointWaitState {
+    int last_actual_progress;
+    int last_check_time;
+    int consecutive_no_progress;
+};
+std::unordered_map<int, WaypointWaitState> agent_waypoint_wait_state;
 
 void update_task_location_cache(int task_id, SharedEnvironment* env) {
     if (task_location_cache.find(task_id) != task_location_cache.end()) return;
@@ -107,20 +117,121 @@ double calculate_overlap_ratio(int task1_id, int task2_id, SharedEnvironment* en
     return (double)intersection / (double)union_count;
 }
 
-double get_agent_efficiency(int a, int curr_task_id, SharedEnvironment* env, int current_time) {
-    if (curr_task_id < 0) return 0.0;
-    auto start_it = task_start_time.find(curr_task_id);
-    int time_elapsed = (start_it != task_start_time.end()) ? (current_time - start_it->second) : 1;
-    int agent_loc = env->curr_states[a].location;
-    int goal_loc = env->task_pool[curr_task_id].locations.back();
-    int remaining = DefaultPlanner::get_h(env, agent_loc, goal_loc);
-    int initial_dist = DefaultPlanner::get_h(env, env->task_pool[curr_task_id].locations[0], goal_loc);
-    int progress = initial_dist - remaining;
-    return (time_elapsed > 0) ? ((double)progress / (double)time_elapsed) : 0.0;
+std::vector<int> compute_segment_costs(const Task& task, SharedEnvironment* env) {
+    std::vector<int> cum;
+    cum.push_back(0);
+    int sum = 0;
+    for (size_t k = 1; k < task.locations.size(); k++) {
+        sum += DefaultPlanner::get_h(env, task.locations[k-1], task.locations[k]);
+        cum.push_back(sum);
+    }
+    return cum;
 }
 
-void efficient_task_swap(std::vector<int>& proposed_schedule, SharedEnvironment* env, int current_time) {
+    int compute_actual_progress_cost(int agent_id, const Task& task, SharedEnvironment* env) {
+    if (task.locations.empty()) return 0;
+    int idx = task.idx_next_loc;
+    int agent_loc = env->curr_states[agent_id].location;
+    auto cum = compute_segment_costs(task, env);
+    int total = cum.back();
+    if (idx <= 0) {
+        // Agent hasn't reached the first waypoint yet.
+        // actual_progress = distance_agent_has_traveled_from_start
+        //                  = total_dist - dist_to_goal
+        // (This works for both single-loc and multi-loc tasks)
+        int dist_to_goal = DefaultPlanner::get_h(env, agent_loc, task.locations[0]);
+        return std::max(0, total - dist_to_goal);
+    }
+    if (idx >= (int)task.locations.size()) {
+        return cum.back();  // Already at final waypoint (shouldn't happen normally)
+    }
+    // Agent is on segment [idx-1 -> idx], i.e., heading to task.locations[idx]
+    int completed = 0;
+    for (int k = 1; k < idx; k++) {
+        completed += DefaultPlanner::get_h(env, task.locations[k-1], task.locations[k]);
+    }
+    int next_loc = task.locations[idx];
+    int prev_loc = task.locations[idx - 1];
+    int seg = DefaultPlanner::get_h(env, prev_loc, next_loc);
+    int dist_to_next = DefaultPlanner::get_h(env, agent_loc, next_loc);
+    // Distance traveled in current segment: seg - dist_to_next (≥0 when moving toward next_loc)
+    int traveled = seg - dist_to_next;
+    int actual = completed + traveled;
+    if (actual < 0) actual = 0;
+    if (actual > total) actual = total;
+    return actual;
+}
+
+int compute_ideal_waypoint_index(const Task& task, int t_revealed, int current_time, SharedEnvironment* env) {
+    if (current_time <= t_revealed) return 0;
+    int time_elapsed = current_time - t_revealed;
+    auto cum = compute_segment_costs(task, env);
+    int lo = 0, hi = (int)cum.size() - 1;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (cum[mid] < time_elapsed) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
+void update_consecutive_wait_with_next_loc(int agent_id, int task_id, SharedEnvironment* env, int current_time) {
+    if (task_id < 0) {
+        agent_waypoint_wait_state.erase(agent_id);
+        agent_consecutive_wait[agent_id] = 0;
+        return;
+    }
+    const Task& task = env->task_pool[task_id];
+    int ideal_idx = compute_ideal_waypoint_index(task, task.t_revealed, current_time, env);
+    int actual_progress = compute_actual_progress_cost(agent_id, task, env);
+    auto cum = compute_segment_costs(task, env);
+    int actual_approx = 0;
+    for (int k = 0; k < (int)cum.size(); k++) {
+        if (cum[k] <= actual_progress) actual_approx = k;
+    }
+    auto it = agent_waypoint_wait_state.find(agent_id);
+    if (it == agent_waypoint_wait_state.end()) {
+        WaypointWaitState st;
+        st.last_actual_progress = actual_progress;
+        st.last_check_time = current_time;
+        st.consecutive_no_progress = 0;
+        agent_waypoint_wait_state[agent_id] = st;
+        agent_consecutive_wait[agent_id] = 0;
+        return;
+    }
+    WaypointWaitState& st = it->second;
+    bool made_progress = (actual_progress > st.last_actual_progress);
+    if (made_progress) {
+        agent_consecutive_wait[agent_id] = 0;
+    } else {
+        if (actual_approx < ideal_idx - 1) agent_consecutive_wait[agent_id] += 2;
+        else agent_consecutive_wait[agent_id]++;
+    }
+    st.last_actual_progress = actual_progress;
+    st.last_check_time = current_time;
+}
+
+double get_agent_efficiency(int a, int curr_task_id, SharedEnvironment* env, int current_time) {
+    if (curr_task_id < 0) return 0.0;
+    const Task& task = env->task_pool[curr_task_id];
+    int time_elapsed = current_time - task.t_revealed;
+    if (time_elapsed <= 0) return 0.0;
+    auto cum = compute_segment_costs(task, env);
+    int total = cum.back();
+    int ideal_progress = std::min(total, time_elapsed);
+    int actual_progress = compute_actual_progress_cost(a, task, env);
+    double eff = (ideal_progress > 0) ? ((double)actual_progress / (double)ideal_progress) : 0.0;
+    if (actual_progress < ideal_progress) {
+        int behind_cost = ideal_progress - actual_progress;
+        eff *= std::pow(0.95, behind_cost);
+    }
+    return eff;
+}
+
+void efficient_task_swap(std::vector<int>& proposed_schedule, SharedEnvironment* env, int current_time, int scheduler_call_count, int window_size) {
+    egts_call_count++;
     if (agent_assigned_task.empty()) return;
+
     std::vector<std::pair<int, int>> all_pairs;
     for (auto& at : agent_assigned_task) {
         if (at.second >= 0) all_pairs.push_back(at);
@@ -133,26 +244,38 @@ void efficient_task_swap(std::vector<int>& proposed_schedule, SharedEnvironment*
         int t1 = all_pairs[i].second;
         if (t1 < 0) continue;
         if (std::find(swapped_agents.begin(), swapped_agents.end(), a1) != swapped_agents.end()) continue;
+
+        // H49.2: agent-level cooldown
         auto swap_it1 = egts_last_swap_time.find(a1);
         if (swap_it1 != egts_last_swap_time.end() &&
-            (current_time - swap_it1->second) < EGTS_SWAP_COOLDOWN) continue;
+            (current_time - swap_it1->second) < EGTS_AGENT_COOLDOWN * window_size) continue;
+
+        // H49.2: task-level cooldown
+        auto task_swap_it1 = egts_task_last_swap_time.find(t1);
+        if (task_swap_it1 != egts_task_last_swap_time.end() &&
+            (current_time - task_swap_it1->second) < EGTS_TASK_COOLDOWN * window_size) continue;
+
         double eff1 = get_agent_efficiency(a1, t1, env, current_time);
         if (eff1 >= EGTS_EFFICIENCY_THRESHOLD) continue;
-        int task1_idx = env->task_pool[t1].idx_next_loc;
-        if (task1_idx > EGTS_TASK_EARLY_THRESHOLD) continue;
 
         for (size_t j = i + 1; j < all_pairs.size(); j++) {
             int a2 = all_pairs[j].first;
             int t2 = all_pairs[j].second;
             if (t2 < 0) continue;
             if (std::find(swapped_agents.begin(), swapped_agents.end(), a2) != swapped_agents.end()) continue;
+
+            // H49.2: agent-level cooldown
             auto swap_it2 = egts_last_swap_time.find(a2);
             if (swap_it2 != egts_last_swap_time.end() &&
-                (current_time - swap_it2->second) < EGTS_SWAP_COOLDOWN) continue;
+                (current_time - swap_it2->second) < EGTS_AGENT_COOLDOWN * window_size) continue;
+
+            // H49.2: task-level cooldown
+            auto task_swap_it2 = egts_task_last_swap_time.find(t2);
+            if (task_swap_it2 != egts_task_last_swap_time.end() &&
+                (current_time - task_swap_it2->second) < EGTS_TASK_COOLDOWN * window_size) continue;
+
             double eff2 = get_agent_efficiency(a2, t2, env, current_time);
             if (eff2 >= EGTS_EFFICIENCY_THRESHOLD) continue;
-            int task2_idx = env->task_pool[t2].idx_next_loc;
-            if (task2_idx > EGTS_TASK_EARLY_THRESHOLD) continue;
 
             int a1_loc = env->curr_states[a1].location;
             int a2_loc = env->curr_states[a2].location;
@@ -167,6 +290,7 @@ void efficient_task_swap(std::vector<int>& proposed_schedule, SharedEnvironment*
             double swap_gain = (old_total > 0) ? ((double)(old_total - new_total) / (double)old_total) : 0.0;
 
             if (swap_gain > EGTS_SWAP_GAIN_THRESHOLD) {
+                egts_swap_count++;
                 proposed_schedule[a1] = t2;
                 proposed_schedule[a2] = t1;
                 agent_assigned_task[a1] = t2;
@@ -175,8 +299,11 @@ void efficient_task_swap(std::vector<int>& proposed_schedule, SharedEnvironment*
                 task_start_time[t1] = current_time;
                 egts_last_swap_time[a1] = current_time;
                 egts_last_swap_time[a2] = current_time;
+                egts_task_last_swap_time[t1] = current_time;  // H49.2: task-level cooldown starts
+                egts_task_last_swap_time[t2] = current_time;  // H49.2: task-level cooldown starts
                 agent_consecutive_wait[a1] = 0;
                 agent_consecutive_wait[a2] = 0;
+
                 swapped_agents.push_back(a1);
                 swapped_agents.push_back(a2);
                 break;
@@ -198,7 +325,11 @@ void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
     agent_last_switch_time.clear();
     agent_consecutive_wait.clear();
     agent_prev_remaining.clear();
+    agent_waypoint_wait_state.clear();
     egts_last_swap_time.clear();
+    egts_task_last_swap_time.clear();
+    egts_swap_count = 0;
+    egts_call_count = 0;
 
     // H26: Map-adaptive feature detection
     if (env->num_of_agents > 0 && !env->new_tasks.empty())
@@ -239,7 +370,12 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
     // Each scheduler call represents approximately 1 timestep equivalent.
     static int scheduler_call_count = 0;
     scheduler_call_count++;
-    int current_time = scheduler_call_count;
+    // H48: Convert call count to simulation timestep for consistent time tracking
+    // window_size = number of simulation steps between consecutive scheduler calls
+    const int window_size = (int)(env->min_planner_communication_time / (env->action_time * env->max_counter)) + 1;
+    int simulation_timestep = scheduler_call_count * window_size;
+    int current_time = simulation_timestep;
+    fprintf(stderr, "[SCHEDULER] call_count=%d sim_ts=%d window_size=%d\n", scheduler_call_count, simulation_timestep, window_size);
 
     // H28/H31: Track agent task assignments and wait state
     for (int a = 0; a < env->num_of_agents; a++)
@@ -267,7 +403,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
         }
     }
     
-    bool do_reassess = (current_time - last_reassess_time >= REASSESS_INTERVAL);
+    bool do_reassess = (current_time - last_reassess_time >= REASSESS_INTERVAL * window_size);
     
     if (do_reassess && !agent_assigned_task.empty())
     {
@@ -279,7 +415,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
             if (start_it != task_start_time.end())
             {
                 int time_elapsed = current_time - start_it->second;
-                if (time_elapsed > 20)
+                if (time_elapsed > 20 * window_size)
                 {
                     int agent_id = at.first;
                     int goal_loc = env->task_pool[task_id].locations.back();
@@ -287,38 +423,24 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                     int remaining = DefaultPlanner::get_h(env, agent_loc, goal_loc);
                     int initial_dist = DefaultPlanner::get_h(env, env->task_pool[task_id].locations[0], goal_loc);
                     if (initial_dist > 0 && remaining > initial_dist * 8 / 10)
-                        task_age_map[task_id] = current_time - TASK_FORCE_REASSIGN_THRESHOLD - 10;
+                        task_age_map[task_id] = current_time - TASK_FORCE_REASSIGN_THRESHOLD * window_size - 10 * window_size;
                 }
             }
         }
     }
 
     // H31: Update wait tracking - count consecutive steps with no progress
-    for (int a = 0; a < env->num_of_agents; a++)
-    {
+    for (int a = 0; a < env->num_of_agents; a++) {
         int task_id = env->curr_task_schedule[a];
-        if (task_id < 0) {
-            agent_consecutive_wait[a] = 0;
-            continue;
-        }
-        int agent_loc = env->curr_states[a].location;
-        int goal_loc = env->task_pool[task_id].locations.back();
-        int remaining = DefaultPlanner::get_h(env, agent_loc, goal_loc);
-        auto prev_it = agent_prev_remaining.find(a);
-        if (prev_it != agent_prev_remaining.end())
-        {
-            if (remaining >= prev_it->second)
-                agent_consecutive_wait[a]++;
-            else
-                agent_consecutive_wait[a] = 0;
-        }
-        agent_prev_remaining[a] = remaining;
+        update_consecutive_wait_with_next_loc(a, task_id, env, current_time);
     }
 
     // H49.1: EGTS - run every reassess cycle, independent of free_tasks pool
     if (do_reassess) {
-        efficient_task_swap(proposed_schedule, env, current_time);
+        efficient_task_swap(proposed_schedule, env, current_time, scheduler_call_count, window_size);
     }
+
+    
 
     // H40: Blocked-agent task switching (FIX for H31 bug)
     // H31 only checked free_agents, but in lifelong scenario free_agents is always nearly empty
@@ -329,7 +451,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
         {
             int a = at.first;
             auto switch_it = agent_last_switch_time.find(a);
-            if (switch_it != agent_last_switch_time.end() && (current_time - switch_it->second) < TASK_SWITCH_COOLDOWN_H31)
+            if (switch_it != agent_last_switch_time.end() && (current_time - switch_it->second) < TASK_SWITCH_COOLDOWN_H31 * window_size)
                 continue;
             int curr_task_id = at.second;
             if (curr_task_id < 0) continue;
@@ -360,7 +482,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
             if (best_free_task != -1)
             {
                 proposed_schedule[a] = best_free_task;
-                task_age_map[curr_task_id] = current_time - TASK_REASSIGN_THRESHOLD - 10;
+                task_age_map[curr_task_id] = current_time - TASK_REASSIGN_THRESHOLD * window_size - 10 * window_size;
                 free_tasks.erase(best_free_task);
                 agent_assigned_task[a] = best_free_task;
                 task_start_time[best_free_task] = current_time;
@@ -381,7 +503,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
         for (int a : free_agents)
         {
             auto switch_it = agent_last_switch_time.find(a);
-            if (switch_it != agent_last_switch_time.end() && (current_time - switch_it->second) < TASK_SWITCH_COOLDOWN)
+            if (switch_it != agent_last_switch_time.end() && (current_time - switch_it->second) < TASK_SWITCH_COOLDOWN * window_size)
                 continue;
             int curr_task_id = env->curr_task_schedule[a];
             if (curr_task_id < 0) continue;
@@ -409,7 +531,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                 if (best_free_task != -1 && best_efficiency > curr_efficiency * EFFICIENCY_SWITCH_THRESHOLD)
                 {
                     proposed_schedule[a] = best_free_task;
-                    task_age_map[curr_task_id] = current_time - TASK_REASSIGN_THRESHOLD - 10;
+                    task_age_map[curr_task_id] = current_time - TASK_REASSIGN_THRESHOLD * window_size - 10 * window_size;
                     free_tasks.erase(best_free_task);
                     agent_assigned_task[a] = best_free_task;
                     task_start_time[best_free_task] = current_time;
@@ -444,7 +566,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
             // Skip if agent is in cooldown
             auto switch_it1 = agent_last_switch_time.find(a1);
             if (switch_it1 != agent_last_switch_time.end() && 
-                (current_time - switch_it1->second) < MUTUAL_SWITCH_COOLDOWN) continue;
+                (current_time - switch_it1->second) < MUTUAL_SWITCH_COOLDOWN * window_size) continue;
             
             for (size_t j = i + 1; j < agents_with_tasks.size(); j++) {
                 int a2 = agents_with_tasks[j];
@@ -487,7 +609,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                 
                 if (best_free_task != -1) {
                     proposed_schedule[switch_agent] = best_free_task;
-                    task_age_map[switch_task] = current_time - TASK_REASSIGN_THRESHOLD - 10;
+                    task_age_map[switch_task] = current_time - TASK_REASSIGN_THRESHOLD * window_size - 10 * window_size;
                     free_tasks.erase(best_free_task);
                     agent_assigned_task[switch_agent] = best_free_task;
                     task_start_time[best_free_task] = current_time;
@@ -535,9 +657,9 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
             if (age_it != task_age_map.end())
             {
                 int task_age = current_time - age_it->second;
-                if (task_age > TASK_FORCE_REASSIGN_THRESHOLD && TASK_FORCE_REASSIGN_THRESHOLD > 0)
+                if (task_age > TASK_FORCE_REASSIGN_THRESHOLD * window_size && TASK_FORCE_REASSIGN_THRESHOLD > 0)
                     dist += 10000;
-                else if (task_age > TASK_REASSIGN_THRESHOLD)
+                else if (task_age > TASK_REASSIGN_THRESHOLD * window_size)
                 {
                     int scaled_penalty = (int)((task_age - TASK_REASSIGN_THRESHOLD) * REASSIGN_AGE_PENALTY_PER_STEP_MAX * REASSIGN_AGE_PENALTY_MULTIPLIER);
                     dist += scaled_penalty;
