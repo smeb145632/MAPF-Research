@@ -3,7 +3,7 @@
 mkdir -p build
 
 cmake -B build ./ -DCMAKE_BUILD_TYPE=Release
-make -C build -j10
+make -C build -j
 
 # Runtime Python component selection via CLI flags:
 #   ./build/lifelong -i <input.json>                           # all C++ default
