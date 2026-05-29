@@ -52,8 +52,6 @@ namespace DefaultPlanner{
     std::vector<bool> require_guide_path;  // 是否需要重新计算引导路?
     std::vector<int> dummy_goals;   // 虚拟目标（当 agent 没有任务时使用）
     TrajLNS trajLNS;                // Trajectory LNS 数据结构
-    // H20: Blocked agent tracking - count consecutive steps agent failed to move
-    std::vector<int> agent_blocked_count;  // agent_id -> consecutive steps unable to move
     std::mt19937 mt1;               // 随机数生成器
 
 

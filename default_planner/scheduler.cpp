@@ -38,8 +38,8 @@ std::unordered_map<int, int> egts_last_swap_call_count;
 std::unordered_map<int, int> egts_task_last_swap_call_count;
 int egts_swap_count = 0;
 int egts_call_count = 0;
-int egts_swap_attempts = 0;      // H31: swap attempts that passed gain threshold
-int egts_swap_rejects_opened = 0; // H31: rejected due to already_opened
+// int egts_swap_attempts = 0;      // H31: swap attempts that passed gain threshold
+// int egts_swap_rejects_opened = 0; // H31: rejected due to already_opened
 int schedule_plan_call_count = 0;
 
 // ================================================================
@@ -221,7 +221,7 @@ void efficient_task_swap(std::vector<int>& proposed_schedule, SharedEnvironment*
 
             if (swap_gain > EGTS_SWAP_GAIN_THRESHOLD) {
                 // H31: track attempts that passed gain threshold
-                egts_swap_attempts++;
+                // egts_swap_attempts++;
 
                 // H31 FIX: Check if target tasks are already opened by OTHER agents
                 // If a target task is already started (idx_next_loc > 0) by someone else,
@@ -232,7 +232,7 @@ void efficient_task_swap(std::vector<int>& proposed_schedule, SharedEnvironment*
                 bool t2_already_opened = (t2_task.idx_next_loc > 0 && t2_task.agent_assigned != a2);
                 if (t1_already_opened || t2_already_opened) {
                     // Cannot swap - target task is already opened by another agent
-                    egts_swap_rejects_opened++;
+                    // egts_swap_rejects_opened++;
                     continue;  // try next j candidate
                 }
 
@@ -268,8 +268,8 @@ void schedule_initialize(int preprocess_time_limit, SharedEnvironment* env)
     egts_task_last_swap_call_count.clear();
     egts_swap_count = 0;
     egts_call_count = 0;
-    egts_swap_attempts = 0;
-    egts_swap_rejects_opened = 0;
+    // egts_swap_attempts = 0;
+    // egts_swap_rejects_opened = 0;
     schedule_plan_call_count = 0;
     return;
 }
@@ -388,7 +388,7 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
                 else if (task_age > TASK_REASSIGN_THRESHOLD)
                 {
                     // Penalize old tasks to encourage reassignment
-                    dist += (task_age - TASK_REASSIGN_THRESHOLD) * REASSIGN_AGE_PENALTY_PER_STEP;
+                    dist += (task_age - TASK_REASSIGN_THRESHOLD) * REASSIGN_AGE_PENALTY_PER_STEP_MAX;
                 }
             }
 
@@ -418,12 +418,12 @@ void schedule_plan(int time_limit, std::vector<int> & proposed_schedule,  Shared
     }
 
     // H31: EGTS statistics summary at end of each schedule_plan call
-    static int last_print_call = 0;
-    if (schedule_plan_call_count != last_print_call) {
-        last_print_call = schedule_plan_call_count;
-        fprintf(stderr, "[EGTS_STATS] calls=%d swaps=%d attempts=%d rejects_opened=%d\n",
-                schedule_plan_call_count, egts_swap_count, egts_swap_attempts, egts_swap_rejects_opened);
-    }
+    // static int last_print_call = 0;
+    // if (schedule_plan_call_count != last_print_call) {
+    //     last_print_call = schedule_plan_call_count;
+    //     fprintf(stderr, "[EGTS_STATS] calls=%d swaps=%d attempts=%d rejects_opened=%d\n",
+    //             schedule_plan_call_count, egts_swap_count, egts_swap_attempts, egts_swap_rejects_opened);
+    // }
 
     return;
 }

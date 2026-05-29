@@ -76,8 +76,8 @@ extern std::unordered_map<int, int> egts_last_swap_call_count;
 extern std::unordered_map<int, int> egts_task_last_swap_call_count;
 extern int egts_swap_count;
 extern int egts_call_count;
-extern int egts_swap_attempts;      // H31: swap attempts that passed gain threshold
-extern int egts_swap_rejects_opened; // H31: rejected due to already_opened
+// extern int egts_swap_attempts;      // H31: swap attempts that passed gain threshold
+// extern int egts_swap_rejects_opened; // H31: rejected due to already_opened
 extern int schedule_plan_call_count;  // exposed for cooldown check
 
 }
