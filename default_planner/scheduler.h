@@ -60,26 +60,6 @@ extern std::unordered_set<int> free_tasks;
 // (persists across timesteps until task is assigned)
 extern std::unordered_map<int, int> task_age_map;
 
-// ============================================================
-// EGTS (Efficient Guided Task Swap) - H26/H27/H31
-// Re-evaluate task assignments every N calls to schedule_plan
-const int REASSESS_CALL_INTERVAL = 5;
-
-// Batch assignment tracking (agent_id -> task_id)
-extern std::unordered_map<int, int> agent_assigned_task;
-extern int last_reassess_time;
-
-// EGTS swap tracking (call-count based cooldown)
-// egts_last_swap_call_count: agent_id -> schedule_plan call count when last swapped
-// egts_task_last_swap_call_count: task_id -> schedule_plan call count when last swapped
-extern std::unordered_map<int, int> egts_last_swap_call_count;
-extern std::unordered_map<int, int> egts_task_last_swap_call_count;
-extern int egts_swap_count;
-extern int egts_call_count;
-// extern int egts_swap_attempts;      // H31: swap attempts that passed gain threshold
-// extern int egts_swap_rejects_opened; // H31: rejected due to already_opened
-extern int schedule_plan_call_count;  // exposed for cooldown check
-
 }
 
 #endif

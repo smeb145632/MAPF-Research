@@ -7,6 +7,7 @@
 #include "heap.h"
 #include "search_node.h"
 #include "heuristics.h"
+#include "const.h"
 
 namespace DefaultPlanner{
 
