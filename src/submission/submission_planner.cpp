@@ -265,6 +265,7 @@ namespace SubmissionPlanner{
     // ============================================================
     // 作用：在每个规划步骤开始时刷新状?
     //?setup_multistep_episode_state 类似，但更轻?
+    // 修改：实时使用当前位置作为 dummy goal，不再回出生点
     static void refresh_multistep_step_state(SharedEnvironment* env, std::vector<double>& local_priority)
     {
         prev_decision.clear();
@@ -275,6 +276,8 @@ namespace SubmissionPlanner{
             // 设置任务/目标
             if (env->goal_locations[i].empty())
             {
+                // 实时更新 dummy_goals 为当前位置，不再回出生点
+                dummy_goals.at(i) = env->curr_states.at(i).location;
                 trajLNS.tasks[i] = dummy_goals.at(i);
                 local_priority[i] = p_copy[i];
             }
