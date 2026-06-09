@@ -1,7 +1,5 @@
 #include "Entry.h"
 #include "Tasks.h"
-#include "utils.h"
-#include "heuristics.h"
 
 // The initialize function will be called by competition system at the preprocessing stage.
 // Implement the initialize functions of the planner and scheduler to load or compute auxiliary data.

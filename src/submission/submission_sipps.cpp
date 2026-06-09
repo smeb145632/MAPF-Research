@@ -1,12 +1,12 @@
-#include "sipps.h"
-#include "const.h"
+#include "submission_sipps.h"
+#include "submission_constants.h"
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
 #include <cmath>
 
-namespace DefaultPlanner {
+namespace SubmissionPlanner {
 
 // Get soft obstacle indicator at vertex v for time t
 // Returns true if there's significant traffic (soft obstacle)
@@ -284,4 +284,4 @@ int sipps(
     return goal_c;
 }
 
-} // namespace DefaultPlanner
+} // namespace SubmissionPlanner

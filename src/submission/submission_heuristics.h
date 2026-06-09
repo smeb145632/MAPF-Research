@@ -2,13 +2,13 @@
 #ifndef heuristics_hpp
 #define heuristics_hpp
 
-#include "Types.h"
-#include "utils.h"
+#include "submission_types.h"
+#include "submission_utils.h"
 #include <queue>
-#include "TrajLNS.h"
-#include "search_node.h"
+#include "submission_traj_lns.h"
+#include "submission_search_node.h"
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 
 void init_heuristics(SharedEnvironment* env);
 

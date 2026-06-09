@@ -4,7 +4,7 @@
 #include <vector>
 #include <iostream>
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 struct s_node
 {
     int label = 0;

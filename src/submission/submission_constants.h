@@ -1,6 +1,6 @@
 #ifndef CONST_H
 #define CONST_H
-namespace DefaultPlanner
+namespace SubmissionPlanner
 {
     // pibt runtime (ms) per 100 agents.
     // The default planner will use this value to determine how much time to allocate for PIBT action time.

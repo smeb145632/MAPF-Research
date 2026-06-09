@@ -2,14 +2,14 @@
 #ifndef search_hpp
 #define search_hpp
 
-#include "Types.h"
-#include "utils.h"
-#include "Memory.h"
-#include "heap.h"
-#include "search_node.h"
-#include "heuristics.h"
+#include "submission_types.h"
+#include "submission_utils.h"
+#include "submission_memory.h"
+#include "submission_heap.h"
+#include "submission_search_node.h"
+#include "submission_heuristics.h"
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 //a astar minimized the opposide traffic flow with existing traffic flow
 
 s_node astar(SharedEnvironment* env, std::vector<Int4>& flow,

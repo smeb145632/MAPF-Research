@@ -1,35 +1,12 @@
-#include "planner.h"
-#include "heuristics.h"
+#include "submission_planner.h"
+#include "submission_heuristics.h"
 #include "SharedEnv.h"
-#include "pibt.h"
-#include "flow.h"
-#include "const.h"
-#include <iostream>
+#include "submission_pibt.h"
+#include "submission_flow.h"
+#include "submission_constants.h"
 
 
-namespace DefaultPlanner{
-
-    // ============================================================
-    // 辅助函数：将 Action 枚举转为字符串（用于调试输出?
-    // ============================================================
-    // Action::FW  = Forward (前进)
-    // Action::CR  = Clockwise Rotate (右转90?
-    // Action::CCR = Counter-Clockwise Rotate (左转90?
-    // Action::W   = Wait (等待)
-    // Action::NA  = Not Available (不可?
-    static const char* debug_action_to_string(Action action)
-    {
-        switch (action)
-        {
-            case Action::FW: return "FW";
-            case Action::CR: return "CR";
-            case Action::CCR: return "CCR";
-            case Action::W: return "W";
-            case Action::NA: return "NA";
-            default: return "UNKNOWN";
-        }
-    }
-
+namespace SubmissionPlanner{
 
     // ============================================================
     // 默认规划器的全局数据
@@ -614,8 +591,6 @@ namespace DefaultPlanner{
 
             if (adjusted_steps != num_steps)
             {
-                std::cout << "[DefaultPlanner::plan] dynamic steps: num_steps " << num_steps
-                          << " -> " << adjusted_steps << " (density=" << density << ")" << std::endl;
                 num_steps = adjusted_steps;
             }
         }
@@ -671,12 +646,6 @@ namespace DefaultPlanner{
         int pibt_time = (int)(base_pibt_time * density_multiplier * time_multiplier);
         if (pibt_time <= 0) pibt_time = 1;
 
-        // 调试输出密度和时间预算信息
-        std::cout << "[DefaultPlanner::plan] H03 adaptive: task_density=" << task_density
-                  << ", density_mult=" << density_multiplier
-                  << ", time_mult=" << time_multiplier
-                  << ", pibt_time=" << pibt_time << "ms" << std::endl;
-
         // Flow 优化时间预算 = 总时?- PIBT时间 - 容差
         const int flow_budget_ms = std::max(0, time_limit - pibt_time * num_steps - TRAFFIC_FLOW_ASSIGNMENT_END_TIME_TOLERANCE);
         TimePoint flow_end_time = episode_start + std::chrono::milliseconds(flow_budget_ms);
@@ -700,14 +669,6 @@ namespace DefaultPlanner{
         // 更新引导路径, traffic-flow流程、加上轨迹偏离地图搜索后、通过偏移排序重新规划一?知道time-end;
         update_guide_paths_once_for_multistep(env, flow_end_time);
 
-        // 记录设置阶段耗时
-        const auto after_setup = std::chrono::steady_clock::now();
-        const auto setup_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(after_setup - episode_start).count();
-        std::cout << "[DefaultPlanner::plan] timing: time_limit=" << time_limit
-              << "ms, pibt_time_hint=" << pibt_time
-              << "ms, flow_budget=" << flow_budget_ms
-              << "ms, setup_elapsed=" << setup_elapsed_ms << "ms" << std::endl;
-
         // 提交?episode 的优先级更新
         p = local_priority;
 
@@ -729,64 +690,6 @@ namespace DefaultPlanner{
 
             // 保存动作并更新状?
             append_actions_and_rollout_states(env, actions, one_step_actions);
-        }
-
-        // ----------------------------------------
-        // 调试输出（仅 agent 47?
-        // ----------------------------------------
-        std::cout << "[DefaultPlanner::plan] computed actions for "
-                  << env->num_of_agents << " agents over " << num_steps << " steps" << std::endl;
-        for (int aid = 0; aid < env->num_of_agents; aid++)
-        {
-            if (aid != 47) continue;  // 只输?agent 47 的信?
-            int curr_loc = env->curr_states[aid].location;
-            int goal_loc = -1;
-            if (!env->goal_locations[aid].empty())
-            {
-                goal_loc = env->goal_locations[aid].front().first;
-            }
-
-            // 获取分配的任务信?
-            int assigned_task_id = -1;
-            std::string task_details = "N/A";
-            if (aid < env->curr_task_schedule.size())
-            {
-                assigned_task_id = env->curr_task_schedule[aid];
-                auto it = env->task_pool.find(assigned_task_id);
-                if (it != env->task_pool.end())
-                {
-                    const auto& task = it->second;
-                    std::ostringstream oss;
-                    oss << "task_id=" << task.task_id
-                        << ", t_revealed=" << task.t_revealed
-                        << ", t_completed=" << task.t_completed
-                        << ", agent_assigned=" << task.agent_assigned
-                        << ", idx_next_loc=" << task.idx_next_loc
-                        << ", locations=[";
-                    for (size_t i = 0; i < task.locations.size(); ++i)
-                    {
-                        oss << task.locations[i];
-                        if (i + 1 < task.locations.size()) oss << ",";
-                    }
-                    oss << "]";
-                    const bool task_finished = (task.idx_next_loc >= static_cast<int>(task.locations.size()));
-                    if (!task_finished)
-                    {
-                        oss << ", next_loc=" << task.locations[task.idx_next_loc];
-                    }
-                    task_details = oss.str();
-                }
-            }
-            std::cout << "  agent " << aid
-                      << ": loc=" << curr_loc
-                      << ", goal=" << goal_loc
-                      << ", assigned_task_id=" << assigned_task_id
-                      << ", task_details=[" << task_details << "]:";;
-            for (int step = 0; step < static_cast<int>(actions[aid].size()); step++)
-            {
-                std::cout << (step == 0 ? " " : ", ") << debug_action_to_string(actions[aid][step]);
-            }
-            std::cout << std::endl;
         }
 
         // ----------------------------------------

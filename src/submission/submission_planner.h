@@ -16,12 +16,12 @@
 //   Okumura, K., et al. (2022). Priority Inheritance with Backtracking (PIBT)
 //   for iterative multi-agent path finding. Artificial Intelligence, Vol. 310.
 
-#include "Types.h"
-#include "TrajLNS.h"
+#include "submission_types.h"
+#include "submission_traj_lns.h"
 #include <random>
 
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 
 
     void initialize(int preprocess_time_limit, SharedEnvironment* env);

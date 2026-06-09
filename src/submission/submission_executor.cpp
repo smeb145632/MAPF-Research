@@ -8,9 +8,9 @@
 //   Ma, H., Kumar, T. S., & Koenig, S. (2017). Multi-agent path finding with
 //   delay probabilities. AAAI Conference on Artificial Intelligence, Vol. 31.
 
-#include "default_executor.h"
+#include "submission_executor.h"
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 
     std::unordered_map<int, std::list<int>> tpg; //dependency graph for location visiting orders
     std::unordered_map<int, std::list<int>> temp_tpg; //temporary dependency graph for current timestep, used for process new plan

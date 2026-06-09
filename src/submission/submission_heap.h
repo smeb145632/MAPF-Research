@@ -11,14 +11,14 @@
 //
 // Modified for search nodes used here. Mike
 
-#include "utils.h"
-#include "Memory.h"
-#include "search_node.h"
-#include "Types.h"
+#include "submission_utils.h"
+#include "submission_memory.h"
+#include "submission_search_node.h"
+#include "submission_types.h"
 #include <cassert>
 #include <iostream>
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 
 
 struct min_q

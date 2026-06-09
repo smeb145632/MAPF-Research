@@ -2,9 +2,9 @@
 #ifndef utils_hpp
 #define utils_hpp
 
-#include "Types.h"
+#include "submission_types.h"
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 int get_d(int diff, const SharedEnvironment* env)  ;
 
 

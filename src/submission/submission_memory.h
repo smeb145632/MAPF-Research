@@ -4,9 +4,9 @@
 #include <vector>
 #include <iostream>
 
-#include "search_node.h"
+#include "submission_search_node.h"
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 
 class MemoryPool
 {

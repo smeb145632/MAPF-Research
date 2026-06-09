@@ -1,15 +1,15 @@
 #ifndef SIPPS_HPP
 #define SIPPS_HPP
 
-#include "Types.h"
-#include "utils.h"
-#include "Memory.h"
-#include "heap.h"
-#include "search_node.h"
-#include "heuristics.h"
-#include "const.h"
+#include "submission_types.h"
+#include "submission_utils.h"
+#include "submission_memory.h"
+#include "submission_heap.h"
+#include "submission_search_node.h"
+#include "submission_heuristics.h"
+#include "submission_constants.h"
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 
 // Safe interval structure
 struct SafeInterval {
@@ -72,6 +72,6 @@ int sipps(
     int max_time = MAX_TIMESTEP
 );
 
-} // namespace DefaultPlanner
+} // namespace SubmissionPlanner
 
 #endif

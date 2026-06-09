@@ -1,9 +1,9 @@
 
-#include "heuristics.h"
+#include "submission_heuristics.h"
 #include <queue>
 
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 
 // std::vector<HeuristicTable> global_heuristictable; //TODO: Change this to unordered_map
 std::unordered_map<int, HeuristicTable> global_heuristictable;

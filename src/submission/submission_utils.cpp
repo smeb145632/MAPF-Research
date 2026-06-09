@@ -1,9 +1,9 @@
 
 
 
-#include "utils.h"
+#include "submission_utils.h"
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 int get_d(int diff, const SharedEnvironment* env)  {
 
     return (diff == 1)? 0: (diff == -1)? 2: (diff == env->cols)? 1: 3;

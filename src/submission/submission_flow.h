@@ -1,14 +1,14 @@
 #ifndef flow_hpp
 #define flow_hpp
-#include "Types.h"
-#include "search.h"
-#include "TrajLNS.h"
-#include "heuristics.h"
+#include "submission_types.h"
+#include "submission_search.h"
+#include "submission_traj_lns.h"
+#include "submission_heuristics.h"
 
 #include <random>
 #include <unordered_set>
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 
 //remove flow for each location's outgoing edge according to the traj
 void remove_traj(TrajLNS& lns, int agent);

@@ -1,7 +1,7 @@
 #include "TaskScheduler.h"
 
-#include "const.h"
-#include "heuristics.h"
+#include "submission_constants.h"
+#include "submission_heuristics.h"
 
 #include <algorithm>
 #include <cassert>
@@ -9,6 +9,97 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+
+bool TaskScheduler::is_task_active(int task_id)
+{
+    if (task_id < 0) return false;
+    const auto task_it = env->task_pool.find(task_id);
+    if (task_it == env->task_pool.end()) return false;
+    return !task_it->second.is_finished();
+}
+
+void TaskScheduler::remove_task_from_caches(int task_id)
+{
+    if (task_id < 0) return;
+
+    free_tasks.erase(task_id);
+    task_age_map.erase(task_id);
+    task_start_time.erase(task_id);
+    task_location_cache.erase(task_id);
+    egts_task_last_swap_time.erase(task_id);
+
+    for (auto it = agent_assigned_task.begin(); it != agent_assigned_task.end(); )
+    {
+        if (it->second == task_id)
+        {
+            agent_consecutive_wait[it->first] = 0;
+            agent_prev_remaining.erase(it->first);
+            agent_waypoint_wait_state.erase(it->first);
+            it = agent_assigned_task.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+}
+
+void TaskScheduler::sanitize_proposed_schedule(std::vector<int>& proposed_schedule)
+{
+    std::vector<int> stale_tasks;
+    for (const auto& agent_task : agent_assigned_task)
+        if (!is_task_active(agent_task.second))
+            stale_tasks.push_back(agent_task.second);
+    for (const auto& task_time : task_start_time)
+        if (!is_task_active(task_time.first))
+            stale_tasks.push_back(task_time.first);
+    for (const auto& task_age : task_age_map)
+        if (!is_task_active(task_age.first))
+            stale_tasks.push_back(task_age.first);
+    for (int task_id : free_tasks)
+        if (!is_task_active(task_id))
+            stale_tasks.push_back(task_id);
+    for (int task_id : stale_tasks)
+        remove_task_from_caches(task_id);
+
+    std::unordered_set<int> assigned_tasks;
+    if (static_cast<int>(proposed_schedule.size()) != env->num_of_agents)
+        proposed_schedule.assign(env->num_of_agents, -1);
+
+    for (int agent = 0; agent < env->num_of_agents; agent++)
+    {
+        const int task_id = proposed_schedule[agent];
+        if (task_id < 0)
+        {
+            agent_assigned_task.erase(agent);
+            agent_consecutive_wait[agent] = 0;
+            agent_prev_remaining.erase(agent);
+            agent_waypoint_wait_state.erase(agent);
+            continue;
+        }
+
+        if (!is_task_active(task_id))
+        {
+            proposed_schedule[agent] = -1;
+            remove_task_from_caches(task_id);
+            free_agents.insert(agent);
+            continue;
+        }
+
+        if (assigned_tasks.find(task_id) != assigned_tasks.end())
+        {
+            proposed_schedule[agent] = -1;
+            agent_assigned_task.erase(agent);
+            agent_consecutive_wait[agent] = 0;
+            agent_prev_remaining.erase(agent);
+            agent_waypoint_wait_state.erase(agent);
+            free_agents.insert(agent);
+            continue;
+        }
+
+        assigned_tasks.insert(task_id);
+    }
+}
 
 void TaskScheduler::update_task_location_cache(int task_id)
 {
@@ -63,7 +154,7 @@ std::vector<int> TaskScheduler::compute_segment_costs(const Task& task)
     int sum = 0;
     for (size_t k = 1; k < task.locations.size(); k++)
     {
-        sum += DefaultPlanner::get_h(env, task.locations[k - 1], task.locations[k]);
+        sum += SubmissionPlanner::get_h(env, task.locations[k - 1], task.locations[k]);
         cumulative.push_back(sum);
     }
     return cumulative;
@@ -80,7 +171,7 @@ int TaskScheduler::compute_actual_progress_cost(int agent_id, const Task& task)
 
     if (idx <= 0)
     {
-        const int dist_to_goal = DefaultPlanner::get_h(env, agent_loc, task.locations[0]);
+        const int dist_to_goal = SubmissionPlanner::get_h(env, agent_loc, task.locations[0]);
         return std::max(0, total - dist_to_goal);
     }
     if (idx >= static_cast<int>(task.locations.size()))
@@ -88,12 +179,12 @@ int TaskScheduler::compute_actual_progress_cost(int agent_id, const Task& task)
 
     int completed = 0;
     for (int k = 1; k < idx; k++)
-        completed += DefaultPlanner::get_h(env, task.locations[k - 1], task.locations[k]);
+        completed += SubmissionPlanner::get_h(env, task.locations[k - 1], task.locations[k]);
 
     const int next_loc = task.locations[idx];
     const int prev_loc = task.locations[idx - 1];
-    const int segment = DefaultPlanner::get_h(env, prev_loc, next_loc);
-    const int dist_to_next = DefaultPlanner::get_h(env, agent_loc, next_loc);
+    const int segment = SubmissionPlanner::get_h(env, prev_loc, next_loc);
+    const int dist_to_next = SubmissionPlanner::get_h(env, agent_loc, next_loc);
     const int traveled = segment - dist_to_next;
     const int actual = completed + traveled;
     return std::max(0, std::min(actual, total));
@@ -252,10 +343,10 @@ void TaskScheduler::efficient_task_swap(std::vector<int>& proposed_schedule, int
             const int a2_loc = env->curr_states[a2].location;
             const int t1_start = env->task_pool[t1].locations[0];
             const int t2_start = env->task_pool[t2].locations[0];
-            const int a1_to_t1 = DefaultPlanner::get_h(env, a1_loc, t1_start);
-            const int a1_to_t2 = DefaultPlanner::get_h(env, a1_loc, t2_start);
-            const int a2_to_t1 = DefaultPlanner::get_h(env, a2_loc, t1_start);
-            const int a2_to_t2 = DefaultPlanner::get_h(env, a2_loc, t2_start);
+            const int a1_to_t1 = SubmissionPlanner::get_h(env, a1_loc, t1_start);
+            const int a1_to_t2 = SubmissionPlanner::get_h(env, a1_loc, t2_start);
+            const int a2_to_t1 = SubmissionPlanner::get_h(env, a2_loc, t1_start);
+            const int a2_to_t2 = SubmissionPlanner::get_h(env, a2_loc, t2_start);
             const int old_total = a1_to_t1 + a2_to_t2;
             const int new_total = a1_to_t2 + a2_to_t1;
             const double swap_gain = old_total > 0 ? static_cast<double>(old_total - new_total) / static_cast<double>(old_total) : 0.0;
@@ -306,7 +397,7 @@ void TaskScheduler::initialize(int preprocess_time_limit)
     egts_call_count = 0;
     scheduler_call_count = 0;
 
-    DefaultPlanner::init_heuristics(env);
+    SubmissionPlanner::init_heuristics(env);
 
     if (env->num_of_agents > 0 && !env->new_tasks.empty())
     {
@@ -322,7 +413,7 @@ void TaskScheduler::initialize(int preprocess_time_limit)
             for (int agent = 0; agent < std::min(5, env->num_of_agents); agent++)
             {
                 const int agent_loc = env->curr_states[agent].location;
-                total_dist += DefaultPlanner::get_h(env, agent_loc, task_loc);
+                total_dist += SubmissionPlanner::get_h(env, agent_loc, task_loc);
                 sample_count++;
             }
         }
@@ -338,7 +429,7 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
     if (static_cast<int>(proposed_schedule.size()) != env->num_of_agents)
         proposed_schedule.assign(env->num_of_agents, -1);
 
-    const int scheduler_time_limit = std::max(1, time_limit / 2 - DefaultPlanner::SCHEDULER_TIMELIMIT_TOLERANCE);
+    const int scheduler_time_limit = std::max(1, time_limit / 2 - SubmissionPlanner::SCHEDULER_TIMELIMIT_TOLERANCE);
     const TimePoint endtime = std::chrono::steady_clock::now() + std::chrono::milliseconds(scheduler_time_limit);
 
     scheduler_call_count++;
@@ -346,17 +437,22 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
     const int window_size = action_window > 0 ? static_cast<int>(env->min_planner_communication_time / action_window) + 1 : 1;
     const int current_time = scheduler_call_count * window_size;
 
+    sanitize_proposed_schedule(proposed_schedule);
+
     for (int agent = 0; agent < env->num_of_agents; agent++)
     {
-        const int task_id = env->curr_task_schedule[agent];
+        const int task_id = proposed_schedule[agent];
         if (task_id >= 0)
         {
-            if (agent_assigned_task.find(agent) == agent_assigned_task.end())
+            const bool is_new_assignment = agent_assigned_task.find(agent) == agent_assigned_task.end() ||
+                                           agent_assigned_task[agent] != task_id;
+            if (is_new_assignment)
             {
                 agent_assigned_task[agent] = task_id;
-                task_start_time[task_id] = current_time;
+                if (task_start_time.find(task_id) == task_start_time.end())
+                    task_start_time[task_id] = current_time;
                 const int goal_loc = env->task_pool[task_id].locations.back();
-                const int init_remaining = DefaultPlanner::get_h(env, env->curr_states[agent].location, goal_loc);
+                const int init_remaining = SubmissionPlanner::get_h(env, env->curr_states[agent].location, goal_loc);
                 agent_prev_remaining[agent] = init_remaining;
                 agent_consecutive_wait[agent] = 0;
             }
@@ -384,15 +480,15 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
             const int agent_id = agent_task.first;
             const int goal_loc = env->task_pool[task_id].locations.back();
             const int agent_loc = env->curr_states[agent_id].location;
-            const int remaining = DefaultPlanner::get_h(env, agent_loc, goal_loc);
-            const int initial_dist = DefaultPlanner::get_h(env, env->task_pool[task_id].locations[0], goal_loc);
+            const int remaining = SubmissionPlanner::get_h(env, agent_loc, goal_loc);
+            const int initial_dist = SubmissionPlanner::get_h(env, env->task_pool[task_id].locations[0], goal_loc);
             if (initial_dist > 0 && remaining > initial_dist * 8 / 10)
                 task_age_map[task_id] = current_time - TASK_FORCE_REASSIGN_THRESHOLD * window_size - 10 * window_size;
         }
     }
 
     for (int agent = 0; agent < env->num_of_agents; agent++)
-        update_consecutive_wait_with_next_loc(agent, env->curr_task_schedule[agent], current_time);
+        update_consecutive_wait_with_next_loc(agent, proposed_schedule[agent], current_time);
 
     if (do_reassess)
         efficient_task_swap(proposed_schedule, current_time, window_size);
@@ -419,9 +515,9 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
             for (int free_task_id : free_tasks)
             {
                 const int task_loc = env->task_pool[free_task_id].locations[0];
-                const int travel_dist = DefaultPlanner::get_h(env, agent_loc, task_loc);
+                const int travel_dist = SubmissionPlanner::get_h(env, agent_loc, task_loc);
                 const int task_goal = env->task_pool[free_task_id].locations.back();
-                const int task_dist = DefaultPlanner::get_h(env, task_loc, task_goal);
+                const int task_dist = SubmissionPlanner::get_h(env, task_loc, task_goal);
                 const int new_total_dist = travel_dist + task_dist;
                 double score = new_total_dist > 0 ? 1000.0 / static_cast<double>(new_total_dist) : 1000.0;
                 auto age_it = task_age_map.find(free_task_id);
@@ -444,7 +540,7 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
                 agent_assigned_task[agent] = best_free_task;
                 task_start_time[best_free_task] = current_time;
                 const int goal_loc = env->task_pool[best_free_task].locations.back();
-                const int init_remaining = DefaultPlanner::get_h(env, agent_loc, goal_loc);
+                const int init_remaining = SubmissionPlanner::get_h(env, agent_loc, goal_loc);
                 agent_prev_remaining[agent] = init_remaining;
                 agent_consecutive_wait[agent] = 0;
                 task_start_time.erase(curr_task_id);
@@ -470,10 +566,10 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
 
             const int agent_loc = env->curr_states[agent].location;
             const int goal_loc = env->task_pool[curr_task_id].locations.back();
-            const int remaining = DefaultPlanner::get_h(env, agent_loc, goal_loc);
+            const int remaining = SubmissionPlanner::get_h(env, agent_loc, goal_loc);
             auto start_it = task_start_time.find(curr_task_id);
             const int time_elapsed = start_it != task_start_time.end() ? current_time - start_it->second : 1;
-            const int progress = DefaultPlanner::get_h(env, env->task_pool[curr_task_id].locations[0], goal_loc) - remaining;
+            const int progress = SubmissionPlanner::get_h(env, env->task_pool[curr_task_id].locations[0], goal_loc) - remaining;
             const double curr_efficiency = time_elapsed > 0 ? static_cast<double>(progress) / static_cast<double>(time_elapsed) : 0.0;
             if (curr_efficiency >= 0.3) continue;
 
@@ -482,9 +578,9 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
             for (int free_task_id : free_tasks)
             {
                 const int task_loc = env->task_pool[free_task_id].locations[0];
-                const int travel_dist = DefaultPlanner::get_h(env, agent_loc, task_loc);
+                const int travel_dist = SubmissionPlanner::get_h(env, agent_loc, task_loc);
                 const int task_goal = env->task_pool[free_task_id].locations.back();
-                const int task_dist = DefaultPlanner::get_h(env, task_loc, task_goal);
+                const int task_dist = SubmissionPlanner::get_h(env, task_loc, task_goal);
                 const int new_total_dist = travel_dist + task_dist;
                 const double free_efficiency = new_total_dist > 0 ? 1.0 / static_cast<double>(new_total_dist) : 1.0;
                 if (free_efficiency > best_efficiency)
@@ -553,9 +649,9 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
                     if (overlap_with_stay > MUTUAL_INHIBITION_OVERLAP_THRESHOLD) continue;
 
                     const int task_loc = env->task_pool[free_task_id].locations[0];
-                    const int travel_dist = DefaultPlanner::get_h(env, agent_loc, task_loc);
+                    const int travel_dist = SubmissionPlanner::get_h(env, agent_loc, task_loc);
                     const int task_goal = env->task_pool[free_task_id].locations.back();
-                    const int task_dist = DefaultPlanner::get_h(env, task_loc, task_goal);
+                    const int task_dist = SubmissionPlanner::get_h(env, task_loc, task_goal);
                     const int new_total_dist = travel_dist + task_dist;
                     const double score = new_total_dist > 0 ? 1000.0 / static_cast<double>(new_total_dist) : 1000.0;
                     if (score > best_score)
@@ -607,12 +703,12 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
             if (count % 10 == 0 && std::chrono::steady_clock::now() > endtime) break;
 
             const int agent_loc = env->curr_states.at(agent).location;
-            const int travel_dist = DefaultPlanner::get_h(env, agent_loc, env->task_pool[task_id].locations[0]);
+            const int travel_dist = SubmissionPlanner::get_h(env, agent_loc, env->task_pool[task_id].locations[0]);
             int task_internal = 0;
             int prev_loc = env->task_pool[task_id].locations[0];
             for (size_t k = 1; k < env->task_pool[task_id].locations.size(); k++)
             {
-                task_internal += DefaultPlanner::get_h(env, prev_loc, env->task_pool[task_id].locations[k]);
+                task_internal += SubmissionPlanner::get_h(env, prev_loc, env->task_pool[task_id].locations[k]);
                 prev_loc = env->task_pool[task_id].locations[k];
             }
 
@@ -652,4 +748,6 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
             free_agent_it++;
         }
     }
+
+    sanitize_proposed_schedule(proposed_schedule);
 }

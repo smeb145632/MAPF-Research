@@ -1,16 +1,16 @@
 #ifndef TRAJ_LNS_H
 #define TRAJ_LNS_H
 
-#include "Types.h"
-#include "Memory.h"
-#include "search_node.h"
-#include "heap.h"
-#include "heuristics.h"
+#include "submission_types.h"
+#include "submission_memory.h"
+#include "submission_search_node.h"
+#include "submission_heap.h"
+#include "submission_heuristics.h"
 #include <iostream>
 
 #include <set>
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 // enum ADAPTIVE {RANDOM, CONGESTION, COUNT};
 enum ADAPTIVE {RANDOM, CONGESTION, DEVIATION, COUNT};
 

@@ -2,8 +2,8 @@
 #include <Entry.h>
 
 // Active planner implementation includes
-#include "planner.h"
-#include "const.h"
+#include "submission_planner.h"
+#include "submission_constants.h"
 
 /**
  * Initialises the MAPF planner with a given time limit for preprocessing.
@@ -15,8 +15,8 @@
 void MAPFPlanner::initialize(int preprocess_time_limit)
 {
     // use the remaining entry time limit (after task scheduling) for path planning, -PLANNER_TIMELIMIT_TOLERANCE for timing error tolerance;
-    int limit = preprocess_time_limit - std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - env->plan_start_time).count() - DefaultPlanner::PLANNER_TIMELIMIT_TOLERANCE;
-    DefaultPlanner::initialize(limit, env);
+    int limit = preprocess_time_limit - std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - env->plan_start_time).count() - SubmissionPlanner::PLANNER_TIMELIMIT_TOLERANCE;
+    SubmissionPlanner::initialize(limit, env);
     return;
 }
 
@@ -32,9 +32,9 @@ void MAPFPlanner::initialize(int preprocess_time_limit)
 void MAPFPlanner::plan(int time_limit, Plan & plan) 
 {
     // use the remaining time after task schedule for path planning, -PLANNER_TIMELIMIT_TOLERANCE for timing error tolerance;
-    int limit = time_limit - std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - env->plan_start_time).count() - DefaultPlanner::PLANNER_TIMELIMIT_TOLERANCE;
+    int limit = time_limit - std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - env->plan_start_time).count() - SubmissionPlanner::PLANNER_TIMELIMIT_TOLERANCE;
 
     int min_plan_steps = (int)(env->min_planner_communication_time/(env->action_time*env->max_counter)) + 1;
-    DefaultPlanner::plan(limit, plan.actions, env,min_plan_steps);
+    SubmissionPlanner::plan(limit, plan.actions, env,min_plan_steps);
     return;
 }

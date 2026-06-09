@@ -2,8 +2,8 @@
 #include <iostream>
 #include <vector>
 
-#include "planner.h"
-#include "utils.h"
+#include "submission_planner.h"
+#include "submission_utils.h"
 
 namespace {
 
@@ -34,7 +34,7 @@ State apply_action_simple(const State& s, Action a, const SharedEnvironment* env
     if (s.orientation == 3) delta = -env->cols;
 
     const int nxt = s.location + delta;
-    if (nxt >= 0 && nxt < static_cast<int>(env->map.size()) && DefaultPlanner::validateMove(s.location, nxt, env))
+    if (nxt >= 0 && nxt < static_cast<int>(env->map.size()) && SubmissionPlanner::validateMove(s.location, nxt, env))
     {
         next.location = nxt;
     }
@@ -63,11 +63,11 @@ int main()
     env.goal_locations[1].push_back({20, 0});
     env.goal_locations[2].push_back({4, 0});
 
-    DefaultPlanner::initialize(1000, &env);
+    SubmissionPlanner::initialize(1000, &env);
 
     std::vector<std::vector<Action>> multi_actions;
     const int num_steps = 6;
-    DefaultPlanner::plan(200, multi_actions, &env, num_steps);
+    SubmissionPlanner::plan(200, multi_actions, &env, num_steps);
 
     assert(static_cast<int>(multi_actions.size()) == env.num_of_agents);
     for (int i = 0; i < env.num_of_agents; i++)

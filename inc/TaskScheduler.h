@@ -63,6 +63,9 @@ class TaskScheduler
         int egts_call_count = 0;
         int scheduler_call_count = 0;
 
+        bool is_task_active(int task_id);
+        void remove_task_from_caches(int task_id);
+        void sanitize_proposed_schedule(std::vector<int>& proposed_schedule);
         void update_task_location_cache(int task_id);
         double calculate_overlap_ratio(int task1_id, int task2_id);
         std::vector<int> compute_segment_costs(const Task& task);

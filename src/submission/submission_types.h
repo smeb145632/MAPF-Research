@@ -19,7 +19,7 @@
 
 #include "Plan.h"
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 
 
 	enum DONE{

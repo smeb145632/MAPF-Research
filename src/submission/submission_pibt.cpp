@@ -1,7 +1,7 @@
 
 
 
-#include "pibt.h"
+#include "submission_pibt.h"
 
 #include <cstdint>
 
@@ -9,7 +9,7 @@
 
 
 
-namespace DefaultPlanner{
+namespace SubmissionPlanner{
 int get_gp_h(TrajLNS& lns, int ai, int target){
     int min_heuristic;
     int goal_loc;

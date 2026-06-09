@@ -80,6 +80,14 @@ bool TaskManager::set_task_assignment(vector< int>& assignment, int timestep)
 {
     for (int a = 0; a < assignment.size(); a++)
     {
+        if (assignment[a] != -1 && ongoing_tasks.find(assignment[a]) == ongoing_tasks.end())
+        {
+            assignment[a] = -1;
+        }
+    }
+
+    for (int a = 0; a < assignment.size(); a++)
+    {
         if (planner_schedule[a].empty() || assignment[a] != planner_schedule[a].back().second)
         {
             planner_schedule[a].push_back(make_pair(curr_timestep,assignment[a]));
@@ -219,6 +227,14 @@ void TaskManager::update_tasks(vector<State>& states, vector<int>& assignment, i
         assignment[agent_id] = -1; //reset the assignment of finished agents
     }
     reveal_tasks(timestep);
+
+    for (int agent_id = 0; agent_id < assignment.size(); agent_id++)
+    {
+        if (assignment[agent_id] != -1 && ongoing_tasks.find(assignment[agent_id]) == ongoing_tasks.end())
+        {
+            assignment[agent_id] = -1;
+        }
+    }
 }
 
 /**
