@@ -9,11 +9,14 @@ ENDIF()
 
 include_directories("inc")
 
-# default planner
+# Submission-owned planner implementation copied out of default_planner.
+include_directories("src/planner_impl")
+
+# default planner reference headers
 include_directories("default_planner")
 
-file(GLOB SOURCES "src/*.cpp" "default_planner/*.cpp")
-file(GLOB DEFAULT_PLANNER_SOURCES "default_planner/*.cpp")
+file(GLOB SOURCES "src/*.cpp" "src/planner_impl/*.cpp")
+file(GLOB ACTIVE_PLANNER_SOURCES "src/planner_impl/*.cpp")
 
 
 # Find Boost
@@ -63,7 +66,7 @@ if(BUILD_TESTS)
     enable_testing()
     add_executable(multi_step_plan_test
         tests/multi_step_plan_test.cpp
-        ${DEFAULT_PLANNER_SOURCES}
+        ${ACTIVE_PLANNER_SOURCES}
     )
     target_link_libraries(multi_step_plan_test ${Boost_LIBRARIES})
     add_test(NAME multi_step_plan_test COMMAND multi_step_plan_test)
@@ -89,4 +92,3 @@ if(BUILD_TESTS)
     add_test(NAME python_interface_test COMMAND python_interface_test
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
-

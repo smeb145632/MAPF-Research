@@ -1,7 +1,7 @@
 #include <random>
 #include <Entry.h>
 
-//default planner includes
+// Active planner implementation includes
 #include "planner.h"
 #include "const.h"
 

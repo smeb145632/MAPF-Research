@@ -1,3 +1,4 @@
+
 #ifndef flow_hpp
 #define flow_hpp
 #include "Types.h"
@@ -27,12 +28,8 @@ void update_dist_2_path(TrajLNS& lns, int i);
 //compute distance table for each traj
 void init_dist_table(TrajLNS& lns, int amount);
 
-//update traj and distance table for agent i (with optional deadline)
+//update traj and distance table for agent i
 bool update_traj(TrajLNS& lns, int i, const TimePoint* deadline = nullptr);
-
-// LNS-style local replanning fallback when update_traj fails
-// Returns true if local replanning succeeded
-bool lns_local_replan(TrajLNS& lns, int failed_agent);
 
 
 }
