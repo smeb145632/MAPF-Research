@@ -48,6 +48,7 @@ class TaskScheduler
         std::unordered_map<int, int> task_age_map;
         std::unordered_map<int, int> agent_assigned_task;
         std::unordered_map<int, int> task_start_time;
+        std::unordered_map<int, int> agent_task_start_location;
         std::unordered_map<int, int> agent_last_switch_time;
         std::unordered_map<int, int> agent_consecutive_wait;
         std::unordered_map<int, int> agent_prev_remaining;

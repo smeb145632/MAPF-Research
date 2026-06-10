@@ -76,6 +76,15 @@ if(BUILD_TESTS)
     target_link_libraries(delay_generator_test ${Boost_LIBRARIES})
     add_test(NAME delay_generator_test COMMAND delay_generator_test)
 
+    add_executable(task_scheduler_test
+        tests/task_scheduler_test.cpp
+        src/TaskScheduler.cpp
+        src/submission/submission_heuristics.cpp
+        src/submission/submission_utils.cpp
+    )
+    target_link_libraries(task_scheduler_test ${Boost_LIBRARIES})
+    add_test(NAME task_scheduler_test COMMAND task_scheduler_test)
+
     # Python interface test — needs all sources + bridge sources + pybind11::embed
     # Exclude driver.cpp (has its own main)
     set(TEST_SOURCES ${SOURCES})

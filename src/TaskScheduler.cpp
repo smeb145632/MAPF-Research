@@ -34,6 +34,7 @@ void TaskScheduler::remove_task_from_caches(int task_id)
         {
             agent_consecutive_wait[it->first] = 0;
             agent_prev_remaining.erase(it->first);
+            agent_task_start_location.erase(it->first);
             agent_waypoint_wait_state.erase(it->first);
             it = agent_assigned_task.erase(it);
         }
@@ -69,11 +70,26 @@ void TaskScheduler::sanitize_proposed_schedule(std::vector<int>& proposed_schedu
     for (int agent = 0; agent < env->num_of_agents; agent++)
     {
         const int task_id = proposed_schedule[agent];
+        const int current_task_id = agent < static_cast<int>(env->curr_task_schedule.size()) ? env->curr_task_schedule[agent] : -1;
+
+        if (current_task_id >= 0 && is_task_active(current_task_id))
+        {
+            const Task& current_task = env->task_pool[current_task_id];
+            if (current_task.idx_next_loc > 0 && task_id != current_task_id)
+            {
+                proposed_schedule[agent] = current_task_id;
+                assigned_tasks.insert(current_task_id);
+                agent_assigned_task[agent] = current_task_id;
+                continue;
+            }
+        }
+
         if (task_id < 0)
         {
             agent_assigned_task.erase(agent);
             agent_consecutive_wait[agent] = 0;
             agent_prev_remaining.erase(agent);
+            agent_task_start_location.erase(agent);
             agent_waypoint_wait_state.erase(agent);
             continue;
         }
@@ -86,12 +102,26 @@ void TaskScheduler::sanitize_proposed_schedule(std::vector<int>& proposed_schedu
             continue;
         }
 
+        const Task& proposed_task = env->task_pool[task_id];
+        if (proposed_task.idx_next_loc > 0 && proposed_task.agent_assigned != agent)
+        {
+            proposed_schedule[agent] = -1;
+            agent_assigned_task.erase(agent);
+            agent_consecutive_wait[agent] = 0;
+            agent_prev_remaining.erase(agent);
+            agent_task_start_location.erase(agent);
+            agent_waypoint_wait_state.erase(agent);
+            free_agents.insert(agent);
+            continue;
+        }
+
         if (assigned_tasks.find(task_id) != assigned_tasks.end())
         {
             proposed_schedule[agent] = -1;
             agent_assigned_task.erase(agent);
             agent_consecutive_wait[agent] = 0;
             agent_prev_remaining.erase(agent);
+            agent_task_start_location.erase(agent);
             agent_waypoint_wait_state.erase(agent);
             free_agents.insert(agent);
             continue;
@@ -253,7 +283,9 @@ double TaskScheduler::get_agent_efficiency(int agent_id, int task_id, int curren
     if (task_id < 0) return 0.0;
 
     const Task& task = env->task_pool[task_id];
-    const int time_elapsed = current_time - task.t_revealed;
+    const auto start_it = task_start_time.find(task_id);
+    const int start_time = start_it != task_start_time.end() ? start_it->second : task.t_revealed;
+    const int time_elapsed = current_time - start_time;
     if (time_elapsed <= 0) return 0.0;
 
     const auto cumulative = compute_segment_costs(task);
@@ -339,8 +371,10 @@ void TaskScheduler::efficient_task_swap(std::vector<int>& proposed_schedule, int
             const Task& t2_task = env->task_pool[t2];
             if (t2_task.idx_next_loc > 0 && t2_task.agent_assigned == a2) continue;
 
-            const int a1_loc = env->curr_states[a1].location;
-            const int a2_loc = env->curr_states[a2].location;
+            const auto start_loc_it1 = agent_task_start_location.find(a1);
+            const auto start_loc_it2 = agent_task_start_location.find(a2);
+            const int a1_loc = start_loc_it1 != agent_task_start_location.end() ? start_loc_it1->second : env->curr_states[a1].location;
+            const int a2_loc = start_loc_it2 != agent_task_start_location.end() ? start_loc_it2->second : env->curr_states[a2].location;
             const int t1_start = env->task_pool[t1].locations[0];
             const int t2_start = env->task_pool[t2].locations[0];
             const int a1_to_t1 = SubmissionPlanner::get_h(env, a1_loc, t1_start);
@@ -358,8 +392,10 @@ void TaskScheduler::efficient_task_swap(std::vector<int>& proposed_schedule, int
                 proposed_schedule[a2] = t1;
                 agent_assigned_task[a1] = t2;
                 agent_assigned_task[a2] = t1;
-                task_start_time[t2] = task_start_time[t1];
+                task_start_time[t2] = current_time;
                 task_start_time[t1] = current_time;
+                agent_task_start_location[a1] = env->curr_states[a1].location;
+                agent_task_start_location[a2] = env->curr_states[a2].location;
                 egts_last_swap_time[a1] = current_time;
                 egts_last_swap_time[a2] = current_time;
                 egts_task_last_swap_time[t1] = current_time;
@@ -383,6 +419,7 @@ void TaskScheduler::initialize(int preprocess_time_limit)
     task_age_map.clear();
     agent_assigned_task.clear();
     task_start_time.clear();
+    agent_task_start_location.clear();
     agent_last_switch_time.clear();
     agent_consecutive_wait.clear();
     agent_prev_remaining.clear();
@@ -454,12 +491,14 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
                 const int goal_loc = env->task_pool[task_id].locations.back();
                 const int init_remaining = SubmissionPlanner::get_h(env, env->curr_states[agent].location, goal_loc);
                 agent_prev_remaining[agent] = init_remaining;
+                agent_task_start_location[agent] = env->curr_states[agent].location;
                 agent_consecutive_wait[agent] = 0;
             }
         }
         else
         {
             agent_assigned_task.erase(agent);
+            agent_task_start_location.erase(agent);
             agent_consecutive_wait[agent] = 0;
         }
     }
@@ -539,6 +578,7 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
                 free_tasks.erase(best_free_task);
                 agent_assigned_task[agent] = best_free_task;
                 task_start_time[best_free_task] = current_time;
+                agent_task_start_location[agent] = agent_loc;
                 const int goal_loc = env->task_pool[best_free_task].locations.back();
                 const int init_remaining = SubmissionPlanner::get_h(env, agent_loc, goal_loc);
                 agent_prev_remaining[agent] = init_remaining;
@@ -563,6 +603,7 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
 
             const int curr_task_id = env->curr_task_schedule[agent];
             if (curr_task_id < 0) continue;
+            if (env->task_pool[curr_task_id].idx_next_loc > 0) continue;
 
             const int agent_loc = env->curr_states[agent].location;
             const int goal_loc = env->task_pool[curr_task_id].locations.back();
@@ -597,6 +638,7 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
                 free_tasks.erase(best_free_task);
                 agent_assigned_task[agent] = best_free_task;
                 task_start_time[best_free_task] = current_time;
+                agent_task_start_location[agent] = agent_loc;
                 task_start_time.erase(curr_task_id);
                 agent_last_switch_time[agent] = current_time;
                 free_agents.erase(agent);
@@ -638,6 +680,8 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
                 const int switch_agent = eff1 < eff2 ? a1 : a2;
                 const int switch_task = eff1 < eff2 ? task1 : task2;
                 const int stay_agent = eff1 < eff2 ? a2 : a1;
+                if (env->task_pool[switch_task].idx_next_loc > 0) continue;
+
                 const int agent_loc = env->curr_states[switch_agent].location;
                 int best_free_task = -1;
                 double best_score = -1.0;
@@ -668,6 +712,7 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
                     free_tasks.erase(best_free_task);
                     agent_assigned_task[switch_agent] = best_free_task;
                     task_start_time[best_free_task] = current_time;
+                    agent_task_start_location[switch_agent] = agent_loc;
                     task_start_time.erase(switch_task);
                     agent_last_switch_time[switch_agent] = current_time;
                     task_location_cache.erase(switch_task);
@@ -738,6 +783,7 @@ void TaskScheduler::plan(int time_limit, std::vector<int>& proposed_schedule)
             proposed_schedule[agent] = best_task;
             agent_assigned_task[agent] = best_task;
             task_start_time[best_task] = current_time;
+            agent_task_start_location[agent] = env->curr_states.at(agent).location;
             free_agent_it = free_agents.erase(free_agent_it);
             free_tasks.erase(best_task);
             task_age_map.erase(best_task);
