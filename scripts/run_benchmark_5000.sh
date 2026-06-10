@@ -2,4 +2,4 @@
 set -u
 
 cd "$(dirname "$0")/.."
-exec ./scripts/run_benchmark.sh 8000
+exec ./scripts/run_benchmark.sh 5000
